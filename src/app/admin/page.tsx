@@ -22,7 +22,8 @@ import {
   Layers,
   Search,
   Activity,
-  Plus
+  Plus,
+  X
 } from 'lucide-react';
 import Link from 'next/link';
 import AffyLogo from '@/components/AffyLogo';

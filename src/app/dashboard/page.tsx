@@ -632,22 +632,13 @@ export default function DashboardPage() {
   // Default bank linked account change
   const handleDefaultAccountChange = (id: string) => {
     if (!currentUser) return;
-    const accs = DB.getLinkedAccounts();
-    const updated = accs.map(acc => {
-      if (acc.user_id === currentUser.id) {
-        return { ...acc, is_default: acc.id === id };
-      }
-      return acc;
-    });
-    DB.saveLinkedAccounts(updated);
+    DB.setDefaultLinkedAccount(id, currentUser.id);
     refreshData();
   };
 
   const handleDeleteAccount = (id: string) => {
     if (!currentUser) return;
-    const accs = DB.getLinkedAccounts();
-    const filtered = accs.filter(acc => acc.id !== id);
-    DB.saveLinkedAccounts(filtered);
+    DB.deleteLinkedAccount(id);
     DB.addAuditLog(currentUser.id, 'Deleted Linked Bank Account', { accountId: id });
     refreshData();
   };
