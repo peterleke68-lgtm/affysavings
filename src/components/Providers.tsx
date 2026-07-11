@@ -1,7 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { initializeDB, DB, getSimulationLogs, clearSimulationLogs, NotificationLog, User, StaffProfile } from '@/services/db';
+import { initializeDB, DB, getSimulationLogs, clearSimulationLogs, NotificationLog, User, StaffProfile, pullFromSupabase } from '@/services/db';
 import { Mail, MessageSquare, Terminal, X, ChevronDown, ChevronUp, BellRing } from 'lucide-react';
 
 interface AppContextProps {
@@ -34,9 +34,14 @@ export default function Providers({ children }: { children: React.ReactNode }) {
 
   // Initialize DB and load data
   useEffect(() => {
-    initializeDB();
-    setCurrentUserState(DB.getCurrentUser());
-    setCurrentStaffState(DB.getCurrentStaff());
+    const initDB = async () => {
+      initializeDB();
+      await pullFromSupabase();
+      setCurrentUserState(DB.getCurrentUser());
+      setCurrentStaffState(DB.getCurrentStaff());
+      setCms(DB.getCMS());
+    };
+    initDB();
     
     // Load theme setting
     const savedTheme = localStorage.getItem('affy_theme') as 'light' | 'dark';

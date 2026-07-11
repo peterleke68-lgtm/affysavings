@@ -1,4 +1,5 @@
 // AFFYBANK Local Storage Database Driver (Strict Savings Pivot)
+import { supabase } from './supabaseClient';
 
 export interface User {
   id: string;
@@ -190,6 +191,188 @@ const getStorage = <T>(key: string, defaultValue: T): T => {
 const setStorage = <T>(key: string, value: T): void => {
   if (typeof window !== "undefined") {
     localStorage.setItem(key, JSON.stringify(value));
+    // Trigger background sync to Supabase
+    syncToSupabase(key, value);
+  }
+};
+
+export const generateUUID = () => {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = Math.random() * 16 | 0;
+    const v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+};
+
+export const syncToSupabase = async (key: string, data: any) => {
+  if (!supabase) return;
+
+  try {
+    if (key === USERS_KEY) {
+      const { error } = await supabase.from('users').upsert(data);
+      if (error) console.error("Error syncing users to Supabase:", error);
+    } else if (key === WALLETS_KEY) {
+      const { error } = await supabase.from('wallets').upsert(data);
+      if (error) console.error("Error syncing wallets to Supabase:", error);
+    } else if (key === SAVINGS_KEY) {
+      const { error } = await supabase.from('savings_plans').upsert(data);
+      if (error) console.error("Error syncing savings_plans to Supabase:", error);
+    } else if (key === TRANSACTIONS_KEY) {
+      const { error } = await supabase.from('transactions').upsert(data);
+      if (error) console.error("Error syncing transactions to Supabase:", error);
+    } else if (key === ACCOUNTS_KEY) {
+      const { error } = await supabase.from('linked_accounts').upsert(data);
+      if (error) console.error("Error syncing linked_accounts to Supabase:", error);
+    } else if (key === BENEFICIARIES_KEY) {
+      const { error } = await supabase.from('beneficiaries').upsert(data);
+      if (error) console.error("Error syncing beneficiaries to Supabase:", error);
+    } else if (key === NOTIFICATIONS_KEY) {
+      const { error } = await supabase.from('notifications').upsert(data);
+      if (error) console.error("Error syncing notifications to Supabase:", error);
+    } else if (key === STAFF_KEY) {
+      const { error } = await supabase.from('staff_profiles').upsert(data);
+      if (error) console.error("Error syncing staff_profiles to Supabase:", error);
+    } else if (key === CMS_KEY) {
+      const { error } = await supabase.from('cms_settings').upsert({ key: 'config', value: data });
+      if (error) console.error("Error syncing cms_settings to Supabase:", error);
+    } else if (key === AUDIT_LOGS_KEY) {
+      const formattedLogs = data.map((log: any) => ({
+        id: log.id,
+        user_id: log.user_id,
+        action: log.action,
+        details: log.details,
+        ip_address: log.ip_address,
+        device_info: log.device_info,
+        created_at: log.created_at
+      }));
+      const { error } = await supabase.from('audit_logs').upsert(formattedLogs);
+      if (error) console.error("Error syncing audit_logs to Supabase:", error);
+    }
+  } catch (e) {
+    console.error("Supabase sync failed:", e);
+  }
+};
+
+export const pullFromSupabase = async () => {
+  if (!supabase) return;
+  
+  try {
+    console.log("Supabase active: syncing database tables...");
+    
+    // 1. Sync Users
+    const { data: remoteUsers } = await supabase.from('users').select('*');
+    if (remoteUsers && remoteUsers.length > 0) {
+      localStorage.setItem(USERS_KEY, JSON.stringify(remoteUsers));
+    } else {
+      const localUsers = getStorage<User[]>(USERS_KEY, []);
+      if (localUsers.length > 0) {
+        await supabase.from('users').upsert(localUsers);
+      }
+    }
+
+    // 2. Sync Wallets
+    const { data: remoteWallets } = await supabase.from('wallets').select('*');
+    if (remoteWallets && remoteWallets.length > 0) {
+      localStorage.setItem(WALLETS_KEY, JSON.stringify(remoteWallets));
+    } else {
+      const localWallets = getStorage<Wallet[]>(WALLETS_KEY, []);
+      if (localWallets.length > 0) {
+        await supabase.from('wallets').upsert(localWallets);
+      }
+    }
+
+    // 3. Sync Savings
+    const { data: remoteSavings } = await supabase.from('savings_plans').select('*');
+    if (remoteSavings && remoteSavings.length > 0) {
+      localStorage.setItem(SAVINGS_KEY, JSON.stringify(remoteSavings));
+    } else {
+      const localSavings = getStorage<SavingsPlan[]>(SAVINGS_KEY, []);
+      if (localSavings.length > 0) {
+        await supabase.from('savings_plans').upsert(localSavings);
+      }
+    }
+
+    // 4. Sync Transactions
+    const { data: remoteTransactions } = await supabase.from('transactions').select('*');
+    if (remoteTransactions && remoteTransactions.length > 0) {
+      localStorage.setItem(TRANSACTIONS_KEY, JSON.stringify(remoteTransactions));
+    } else {
+      const localTxs = getStorage<Transaction[]>(TRANSACTIONS_KEY, []);
+      if (localTxs.length > 0) {
+        await supabase.from('transactions').upsert(localTxs);
+      }
+    }
+
+    // 5. Sync Accounts
+    const { data: remoteAccounts } = await supabase.from('linked_accounts').select('*');
+    if (remoteAccounts && remoteAccounts.length > 0) {
+      localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(remoteAccounts));
+    } else {
+      const localAccounts = getStorage<LinkedAccount[]>(ACCOUNTS_KEY, []);
+      if (localAccounts.length > 0) {
+        await supabase.from('linked_accounts').upsert(localAccounts);
+      }
+    }
+
+    // 6. Sync Beneficiaries
+    const { data: remoteBeneficiaries } = await supabase.from('beneficiaries').select('*');
+    if (remoteBeneficiaries && remoteBeneficiaries.length > 0) {
+      localStorage.setItem(BENEFICIARIES_KEY, JSON.stringify(remoteBeneficiaries));
+    } else {
+      const localBen = getStorage<Beneficiary[]>(BENEFICIARIES_KEY, []);
+      if (localBen.length > 0) {
+        await supabase.from('beneficiaries').upsert(localBen);
+      }
+    }
+
+    // 7. Sync Notifications
+    const { data: remoteNotifications } = await supabase.from('notifications').select('*');
+    if (remoteNotifications && remoteNotifications.length > 0) {
+      localStorage.setItem(NOTIFICATIONS_KEY, JSON.stringify(remoteNotifications));
+    } else {
+      const localNotifications = getStorage<SystemNotification[]>(NOTIFICATIONS_KEY, []);
+      if (localNotifications.length > 0) {
+        await supabase.from('notifications').upsert(localNotifications);
+      }
+    }
+
+    // 8. Sync Staff
+    const { data: remoteStaff } = await supabase.from('staff_profiles').select('*');
+    if (remoteStaff && remoteStaff.length > 0) {
+      localStorage.setItem(STAFF_KEY, JSON.stringify(remoteStaff));
+    } else {
+      const localStaff = getStorage<StaffProfile[]>(STAFF_KEY, []);
+      if (localStaff.length > 0) {
+        await supabase.from('staff_profiles').upsert(localStaff);
+      }
+    }
+
+    // 9. Sync CMS
+    const { data: remoteCMS } = await supabase.from('cms_settings').select('*');
+    if (remoteCMS && remoteCMS.length > 0) {
+      const configItem = remoteCMS.find((item: any) => item.key === 'config');
+      if (configItem) {
+        localStorage.setItem(CMS_KEY, JSON.stringify(configItem.value));
+      }
+    } else {
+      const localCMS = getStorage<any>(CMS_KEY, DEFAULT_CMS);
+      await supabase.from('cms_settings').upsert({ key: 'config', value: localCMS });
+    }
+
+    // 10. Sync Audits
+    const { data: remoteAudit } = await supabase.from('audit_logs').select('*');
+    if (remoteAudit && remoteAudit.length > 0) {
+      localStorage.setItem(AUDIT_LOGS_KEY, JSON.stringify(remoteAudit));
+    } else {
+      const localAudit = getStorage<AuditLog[]>(AUDIT_LOGS_KEY, []);
+      if (localAudit.length > 0) {
+        await supabase.from('audit_logs').upsert(localAudit);
+      }
+    }
+
+    console.log("Supabase synchronization complete.");
+  } catch (e) {
+    console.error("Failed to sync with Supabase:", e);
   }
 };
 
@@ -197,13 +380,13 @@ export const initializeDB = () => {
   if (typeof window === "undefined") return;
 
   // Trigger a storage reset so that existing local database seeds are cleared and reset to zero.
-  if (!localStorage.getItem("affy_v3_zero_balance_reset")) {
+  if (!localStorage.getItem("affy_v4_uuid_reset")) {
     localStorage.removeItem(WALLETS_KEY);
     localStorage.removeItem(SAVINGS_KEY);
     localStorage.removeItem(TRANSACTIONS_KEY);
     localStorage.removeItem(USERS_KEY);
     localStorage.removeItem(CURRENT_USER_KEY);
-    localStorage.setItem("affy_v3_zero_balance_reset", "true");
+    localStorage.setItem("affy_v4_uuid_reset", "true");
   }
 
   // Run migrations for existing users/staff to change email domain to @affysavings.com
@@ -225,10 +408,9 @@ export const initializeDB = () => {
     setStorage(STAFF_KEY, updatedStaff);
   }
 
-  // Seed Users
   const users = getStorage<User[]>(USERS_KEY, []);
   if (users.length === 0) {
-    const customerId = "cust-1234-5678";
+    const customerId = "d29078f4-6c32-4ca6-a5db-2b5003661234";
     const newUsers: User[] = [
       {
         id: customerId,
@@ -247,7 +429,7 @@ export const initializeDB = () => {
         created_at: new Date().toISOString()
       },
       {
-        id: "admin-uuid-1",
+        id: "e3c1a357-19aa-4ab5-950c-99d9b626e828",
         email: "admin@affysavings.com",
         name: "Super Admin",
         phone: "+1 (555) 999-0000",
@@ -266,7 +448,7 @@ export const initializeDB = () => {
     // Seed Wallet for customer
     const newWallets: Wallet[] = [
       {
-        id: "wall-1234",
+        id: "0b6c24be-0720-43db-9d8e-5b1234e56789",
         user_id: customerId,
         balance: 0.00,
         wallet_balance: 0.00, // tracks fluid cash available
@@ -286,7 +468,7 @@ export const initializeDB = () => {
     // Seed Linked Accounts
     const newAccounts: LinkedAccount[] = [
       {
-        id: "lnk-1",
+        id: "948fa886-fca9-482a-a92c-55b6efdf4001",
         user_id: customerId,
         bank_name: "Chase Bank",
         account_number: "**** 4829",
@@ -303,11 +485,11 @@ export const initializeDB = () => {
   const staff = getStorage<StaffProfile[]>(STAFF_KEY, []);
   if (staff.length === 0) {
     const defaultStaff: StaffProfile[] = [
-      { id: "st-1", email: "admin@affysavings.com", name: "Super Admin", role: "Super Admin", permissions: ["all"], is_active: true },
-      { id: "st-2", email: "operations@affysavings.com", name: "Sarah Connor", role: "Operations", permissions: ["manage_users", "approve_accounts"], is_active: true },
-      { id: "st-3", email: "support@affysavings.com", name: "John Doe", role: "Customer Support", permissions: ["view_users", "view_transactions"], is_active: true },
-      { id: "st-4", email: "compliance@affysavings.com", name: "Robert Miller", role: "Compliance", permissions: ["review_transactions", "view_audit_logs"], is_active: true },
-      { id: "st-5", email: "finance@affysavings.com", name: "Alice Smith", role: "Finance", permissions: ["approve_transactions", "view_metrics"], is_active: true }
+      { id: "b361a357-19aa-4ab5-950c-99d9b626e821", email: "admin@affysavings.com", name: "Super Admin", role: "Super Admin", permissions: ["all"], is_active: true },
+      { id: "b361a357-19aa-4ab5-950c-99d9b626e822", email: "operations@affysavings.com", name: "Sarah Connor", role: "Operations", permissions: ["manage_users", "approve_accounts"], is_active: true },
+      { id: "b361a357-19aa-4ab5-950c-99d9b626e823", email: "support@affysavings.com", name: "John Doe", role: "Customer Support", permissions: ["view_users", "view_transactions"], is_active: true },
+      { id: "b361a357-19aa-4ab5-950c-99d9b626e824", email: "compliance@affysavings.com", name: "Robert Miller", role: "Compliance", permissions: ["review_transactions", "view_audit_logs"], is_active: true },
+      { id: "b361a357-19aa-4ab5-950c-99d9b626e825", email: "finance@affysavings.com", name: "Alice Smith", role: "Finance", permissions: ["approve_transactions", "view_metrics"], is_active: true }
     ];
     setStorage(STAFF_KEY, defaultStaff);
   }
@@ -390,7 +572,7 @@ export const DB = {
     let wallet = wallets.find(w => w.user_id === userId);
     if (!wallet) {
       wallet = {
-        id: `wall-${Math.random().toString(36).substr(2, 9)}`,
+        id: generateUUID(),
         user_id: userId,
         balance: 0.00,
         wallet_balance: 0.00,
@@ -445,7 +627,7 @@ export const DB = {
   createSavingsPlan: (userId: string, name: string, type: 'locked' | 'fixed' | 'target', targetAmount: number, durationDays: number): SavingsPlan => {
     const plans = getStorage<SavingsPlan[]>(SAVINGS_KEY, []);
     const newPlan: SavingsPlan = {
-      id: `sav-${Math.random().toString(36).substr(2, 9)}`,
+      id: generateUUID(),
       user_id: userId,
       type,
       name,
@@ -600,7 +782,7 @@ export const DB = {
     const transactions = getStorage<Transaction[]>(TRANSACTIONS_KEY, []);
     const newTx: Transaction = {
       ...tx,
-      id: `tx-${Math.random().toString(36).substr(2, 9)}`,
+      id: generateUUID(),
       created_at: new Date().toISOString()
     };
     transactions.unshift(newTx);
@@ -614,7 +796,7 @@ export const DB = {
     const accounts = getStorage<LinkedAccount[]>(ACCOUNTS_KEY, []);
     const newAcc: LinkedAccount = {
       ...acc,
-      id: `lnk-${Math.random().toString(36).substr(2, 9)}`,
+      id: generateUUID(),
       status: 'verified',
       created_at: new Date().toISOString()
     };
@@ -639,7 +821,7 @@ export const DB = {
     if (list.find(b => b.account_number === ben.account_number)) return;
     const newBen: Beneficiary = {
       ...ben,
-      id: `ben-${Math.random().toString(36).substr(2, 9)}`,
+      id: generateUUID(),
       created_at: new Date().toISOString()
     };
     list.push(newBen);
@@ -651,7 +833,7 @@ export const DB = {
   addInAppNotification: (userId: string | null, title: string, message: string, channel: 'announcement' | 'security' | 'transaction') => {
     const notifications = getStorage<SystemNotification[]>(NOTIFICATIONS_KEY, []);
     const newNot: SystemNotification = {
-      id: `not-${Math.random().toString(36).substr(2, 9)}`,
+      id: generateUUID(),
       user_id: userId,
       title,
       message,
@@ -683,7 +865,7 @@ export const DB = {
   addAuditLog: (userId: string | null, action: string, details: any) => {
     const logs = getStorage<AuditLog[]>(AUDIT_LOGS_KEY, []);
     const newLog: AuditLog = {
-      id: `audit-${Math.random().toString(36).substr(2, 9)}`,
+      id: generateUUID(),
       user_id: userId,
       action,
       details,
@@ -699,7 +881,7 @@ export const DB = {
   getStaff: (): StaffProfile[] => getStorage<StaffProfile[]>(STAFF_KEY, []),
   addStaff: (profile: Omit<StaffProfile, 'id'>) => {
     const list = getStorage<StaffProfile[]>(STAFF_KEY, []);
-    const newStaff: StaffProfile = { ...profile, id: `st-${Math.random().toString(36).substr(2, 9)}` };
+    const newStaff: StaffProfile = { ...profile, id: generateUUID() };
     list.push(newStaff);
     setStorage(STAFF_KEY, list);
     return newStaff;
