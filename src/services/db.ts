@@ -39,7 +39,7 @@ export interface Transaction {
   id: string;
   user_id: string;
   wallet_id: string;
-  type: 'deposit' | 'withdrawal' | 'transfer_sent' | 'transfer_received' | 'savings_deposit' | 'savings_withdrawal' | 'etranzact_checkout';
+  type: 'deposit' | 'withdrawal' | 'transfer_sent' | 'transfer_received' | 'savings_deposit' | 'savings_withdrawal' | 'etranzact_checkout' | 'penalty_fee';
   amount: number;
   status: 'pending' | 'completed' | 'failed';
   recipient_email?: string;

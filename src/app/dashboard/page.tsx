@@ -10,6 +10,7 @@ import {
   Send, 
   ArrowDownLeft, 
   ArrowUpRight, 
+  ArrowRight, 
   Search, 
   Filter, 
   Plus, 
@@ -578,8 +579,8 @@ export default function DashboardPage() {
     wallet.wallet_balance += payoutAmount;
     DB.saveWallet(wallet);
 
-    // Delete savings plan or set status to closed
-    plan.status = 'closed';
+    // Delete savings plan or set status to completed/broken
+    plan.status = penaltyFee > 0 ? 'broken' : 'completed';
     plans[idx] = plan;
     DB.saveSavingsPlans(plans);
 

@@ -55,7 +55,7 @@ create table public.transactions (
   id uuid default uuid_generate_v4() primary key,
   user_id uuid references public.users(id) on delete cascade not null,
   wallet_id uuid references public.wallets(id) on delete cascade not null,
-  type text not null check (type in ('deposit', 'withdrawal', 'transfer_sent', 'transfer_received', 'savings_deposit', 'savings_withdrawal')),
+  type text not null check (type in ('deposit', 'withdrawal', 'transfer_sent', 'transfer_received', 'savings_deposit', 'savings_withdrawal', 'etranzact_checkout', 'penalty_fee')),
   amount numeric(12, 2) not null check (amount > 0),
   status text default 'pending' not null check (status in ('pending', 'completed', 'failed')),
   recipient_email text,
