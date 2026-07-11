@@ -196,6 +196,16 @@ const setStorage = <T>(key: string, value: T): void => {
 export const initializeDB = () => {
   if (typeof window === "undefined") return;
 
+  // Trigger a storage reset so that existing local database seeds are cleared and reset to zero.
+  if (!localStorage.getItem("affy_v3_zero_balance_reset")) {
+    localStorage.removeItem(WALLETS_KEY);
+    localStorage.removeItem(SAVINGS_KEY);
+    localStorage.removeItem(TRANSACTIONS_KEY);
+    localStorage.removeItem(USERS_KEY);
+    localStorage.removeItem(CURRENT_USER_KEY);
+    localStorage.setItem("affy_v3_zero_balance_reset", "true");
+  }
+
   // Run migrations for existing users/staff to change email domain to @affysavings.com
   const existingUsers = getStorage<User[]>(USERS_KEY, []);
   if (existingUsers.length > 0 && existingUsers.some(u => u.email.endsWith('@affybank.com'))) {
@@ -258,78 +268,19 @@ export const initializeDB = () => {
       {
         id: "wall-1234",
         user_id: customerId,
-        balance: 14520500.00,
-        wallet_balance: 5230120.00, // tracks fluid cash available
+        balance: 0.00,
+        wallet_balance: 0.00, // tracks fluid cash available
         currency: "NGN"
       }
     ];
     setStorage(WALLETS_KEY, newWallets);
 
-    // Seed Strict Savings Plans
-    const newSavings: SavingsPlan[] = [
-      {
-        id: "sav-locked",
-        user_id: customerId,
-        type: "locked",
-        name: "3-Month Capital Guard",
-        saved_amount: 3500000.00,
-        target_amount: 5000000.00,
-        end_date: new Date(Date.now() + 86400000 * 90).toISOString(), // 90 days from now
-        status: "active",
-        created_at: new Date().toISOString()
-      },
-      {
-        id: "sav-fixed",
-        user_id: customerId,
-        type: "fixed",
-        name: "Emergency Backup Plan",
-        saved_amount: 1200000.00,
-        target_amount: 2000000.00,
-        end_date: new Date(Date.now() + 86400000 * 30).toISOString(), // 30 days from now
-        status: "active",
-        created_at: new Date().toISOString()
-      },
-      {
-        id: "sav-target",
-        user_id: customerId,
-        type: "target",
-        name: "New Laptop Fund",
-        saved_amount: 300000.00,
-        target_amount: 1000000.00,
-        end_date: new Date(Date.now() + 86400000 * 60).toISOString(), // 60 days
-        status: "active",
-        created_at: new Date().toISOString()
-      }
-    ];
+    // Seed Strict Savings Plans (Empty at default for zero balance)
+    const newSavings: SavingsPlan[] = [];
     setStorage(SAVINGS_KEY, newSavings);
 
-    // Seed initial Transactions
-    const newTransactions: Transaction[] = [
-      {
-        id: "tx-1",
-        user_id: customerId,
-        wallet_id: "wall-1234",
-        type: "deposit",
-        amount: 10000000.00,
-        status: "completed",
-        reference: "TX-DEP-9921",
-        category: "income",
-        description: "Initial payroll deposit",
-        created_at: new Date(Date.now() - 86400000 * 5).toISOString()
-      },
-      {
-        id: "tx-2",
-        user_id: customerId,
-        wallet_id: "wall-1234",
-        type: "savings_deposit",
-        amount: 3500000.00,
-        status: "completed",
-        reference: "TX-SAV-8802",
-        category: "transfer",
-        description: "Deposit to 3-Month Capital Guard",
-        created_at: new Date(Date.now() - 86400000 * 4).toISOString()
-      }
-    ];
+    // Seed initial Transactions (Empty at default for zero balance)
+    const newTransactions: Transaction[] = [];
     setStorage(TRANSACTIONS_KEY, newTransactions);
 
     // Seed Linked Accounts
@@ -441,13 +392,41 @@ export const DB = {
       wallet = {
         id: `wall-${Math.random().toString(36).substr(2, 9)}`,
         user_id: userId,
-        balance: 1000000.00,
-        wallet_balance: 500000.00,
+        balance: 0.00,
+        wallet_balance: 0.00,
         currency: "NGN"
       };
       wallets.push(wallet);
       setStorage(WALLETS_KEY, wallets);
     }
+
+    // Calculate dynamically from transactions
+    const transactions = getStorage<Transaction[]>(TRANSACTIONS_KEY, []);
+    const userTxs = transactions.filter(t => t.user_id === userId && t.status === 'completed');
+    let fluidBalance = 0;
+    userTxs.forEach(t => {
+      if (['deposit', 'transfer_received', 'savings_withdrawal', 'etranzact_checkout'].includes(t.type)) {
+        fluidBalance += t.amount;
+      } else if (['withdrawal', 'transfer_sent', 'savings_deposit', 'penalty_fee'].includes(t.type)) {
+        fluidBalance -= t.amount;
+      }
+    });
+
+    wallet.wallet_balance = fluidBalance;
+
+    // Calculate total balance = fluidBalance + active/completed savings plans
+    const savings = getStorage<SavingsPlan[]>(SAVINGS_KEY, []);
+    const activeSavings = savings.filter(s => s.user_id === userId && (s.status === 'active' || s.status === 'completed'));
+    const totalSavings = activeSavings.reduce((sum, s) => sum + s.saved_amount, 0);
+    wallet.balance = fluidBalance + totalSavings;
+
+    // Sync back cache to storage
+    const idx = wallets.findIndex(w => w.id === wallet!.id);
+    if (idx !== -1) {
+      wallets[idx] = wallet;
+      setStorage(WALLETS_KEY, wallets);
+    }
+
     return wallet;
   },
   saveWallet: (wallet: Wallet) => {

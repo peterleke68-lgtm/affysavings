@@ -38,7 +38,8 @@ import {
   RefreshCw,
   Award,
   ChevronRight,
-  TrendingDown
+  TrendingDown,
+  Check
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import Link from 'next/link';
@@ -93,7 +94,7 @@ export default function DashboardPage() {
   // Link Account Dialog State
   const [linkAccountModal, setLinkAccountModal] = useState(false);
   const [linkAccountData, setLinkAccountData] = useState({
-    bankName: 'Chase Bank',
+    bankName: 'OPay',
     accountNumber: '',
     accountHolder: currentUser?.name || ''
   });
@@ -228,7 +229,7 @@ export default function DashboardPage() {
       `Hi ${currentUser.name},\n\nYou have successfully integrated your ${linkAccountData.bankName} account (${linkAccountData.accountNumber.slice(-4)}) for fluid saving deposits.`
     );
 
-    setLinkAccountData({ bankName: 'Chase Bank', accountNumber: '', accountHolder: currentUser.name });
+    setLinkAccountData({ bankName: 'OPay', accountNumber: '', accountHolder: currentUser.name });
     setLinkAccountModal(false);
     refreshData();
   };
@@ -793,10 +794,6 @@ export default function DashboardPage() {
                 <div className="text-[9px] text-zinc-400 font-mono mt-1 tracking-wider">{currentUser.email}</div>
               </div>
             </div>
-
-            <button onClick={handleLogout} className="p-2.5 rounded-xl hover:bg-red-500/10 hover:text-red-500 text-zinc-500 transition-colors cursor-pointer border border-border/30 bg-card-bg/50 flex items-center justify-center">
-              <LogOut size={16} />
-            </button>
           </div>
         </div>
       </header>
@@ -816,7 +813,7 @@ export default function DashboardPage() {
             onClick={() => setActiveTab('history')}
             className={`pb-3.5 border-b-2 px-1 transition-colors cursor-pointer font-display ${activeTab === 'history' ? 'border-primary text-primary' : 'border-transparent text-zinc-400 hover:text-foreground'}`}
           >
-            Ledger History
+            Transaction History
           </button>
           <button 
             onClick={() => setActiveTab('cards')}
@@ -1040,7 +1037,7 @@ export default function DashboardPage() {
               {/* Mini Recent Transactions */}
               <div className="lg:col-span-4 bg-card-bg border border-border/40 rounded-3xl p-6 shadow-sm hover-lift">
                 <div className="flex items-center justify-between mb-5 pb-3 border-b border-border/30">
-                  <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">Ledger Activity</span>
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">Transaction Activity</span>
                   <button onClick={() => setActiveTab('history')} className="text-[10px] text-primary font-bold hover:underline">
                     View All
                   </button>
@@ -1048,7 +1045,7 @@ export default function DashboardPage() {
 
                 <div className="space-y-4">
                   {transactions.slice(0, 4).length === 0 ? (
-                    <div className="py-8 text-center text-xs text-zinc-400 font-semibold">No transaction ledger recorded.</div>
+                    <div className="py-8 text-center text-xs text-zinc-400 font-semibold">No transaction activity recorded.</div>
                   ) : (
                     transactions.slice(0, 4).map(tx => (
                       <div 
@@ -1102,7 +1099,7 @@ export default function DashboardPage() {
             
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
               <div>
-                <h3 className="text-base font-bold font-display text-foreground">Ledger Logs</h3>
+                <h3 className="text-base font-bold font-display text-foreground">Transaction Logs</h3>
                 <p className="text-xs text-zinc-400">Review all funding deposits, interest additions, and lock penalty states.</p>
               </div>
               <button 
@@ -1778,17 +1775,70 @@ export default function DashboardPage() {
             <form onSubmit={handleLinkAccountSubmit} className="space-y-4">
               <div>
                 <label className="block text-[9px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-widest mb-1.5">Choose Bank Provider</label>
-                <select
-                  value={linkAccountData.bankName}
-                  onChange={(e) => setLinkAccountData({ ...linkAccountData, bankName: e.target.value })}
-                  className="w-full text-xs px-3 py-3 rounded-xl bg-input-bg border border-border/60 focus:border-primary focus:outline-none"
-                >
-                  <option value="Access Bank">Access Bank</option>
-                  <option value="GTBank">GTBank</option>
-                  <option value="Wema Bank">Wema Bank</option>
-                  <option value="United Bank for Africa">UBA</option>
-                  <option value="Zenith Bank">Zenith Bank</option>
-                </select>
+                <div className="relative flex gap-2 h-60 border border-border/40 rounded-2xl overflow-hidden bg-input-bg">
+                  {/* Scrollable list */}
+                  <div id="bank-scroll-container-dash" className="flex-1 overflow-y-auto pr-8 py-1 space-y-3.5 scroll-smooth custom-scrollbar">
+                    {[
+                      { letter: 'A', banks: ['Access Bank', 'ALAT (Wema Bank)'] },
+                      { letter: 'C', banks: ['Carbon (Fintech)', 'Citi Bank Nigeria'] },
+                      { letter: 'E', banks: ['Ecobank Nigeria'] },
+                      { letter: 'F', banks: ['FairMoney (Fintech)', 'Fidelity Bank', 'First Bank of Nigeria', 'First City Monument Bank (FCMB)'] },
+                      { letter: 'G', banks: ['GTBank (Guaranty Trust)'] },
+                      { letter: 'K', banks: ['Kuda Bank (Fintech)'] },
+                      { letter: 'M', banks: ['Moniepoint (Fintech)'] },
+                      { letter: 'O', banks: ['OPay (Fintech)'] },
+                      { letter: 'P', banks: ['PalmPay (Fintech)', 'Providus Bank'] },
+                      { letter: 'R', banks: ['Rubies Bank'] },
+                      { letter: 'S', banks: ['Sparkle Bank', 'Stanbic IBTC Bank', 'Standard Chartered Bank', 'Sterling Bank'] },
+                      { letter: 'U', banks: ['Union Bank', 'United Bank for Africa (UBA)'] },
+                      { letter: 'V', banks: ['VBank (VFD Microfinance)'] },
+                      { letter: 'W', banks: ['Wema Bank'] },
+                      { letter: 'Z', banks: ['Zenith Bank'] }
+                    ].map(group => (
+                      <div key={group.letter} id={`bank-group-dash-${group.letter}`}>
+                        <div className="bg-neutral-gray/60 px-3 py-1 font-bold text-[9px] text-zinc-400 dark:text-zinc-500 uppercase tracking-widest sticky top-0 backdrop-blur-md">
+                          {group.letter}
+                        </div>
+                        <div className="divide-y divide-border/10">
+                          {group.banks.map(bank => (
+                            <button
+                              key={bank}
+                              type="button"
+                              onClick={() => setLinkAccountData({ ...linkAccountData, bankName: bank })}
+                              className={`w-full text-left px-3 py-2 hover:bg-neutral-gray/60 transition-colors text-[11px] flex items-center justify-between ${linkAccountData.bankName === bank ? 'text-primary font-bold bg-primary/5' : 'text-foreground'}`}
+                            >
+                              <span>{bank}</span>
+                              {linkAccountData.bankName === bank && <Check size={12} className="text-primary" />}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Alphabet fast index list */}
+                  <div className="absolute right-1 top-1/2 -translate-y-1/2 flex flex-col items-center gap-0.5 z-10 py-1.5 px-0.5 bg-card-bg/50 backdrop-blur-md rounded-full border border-border/30">
+                    {['A', 'C', 'E', 'F', 'G', 'K', 'M', 'O', 'P', 'R', 'S', 'U', 'V', 'W', 'Z'].map(char => (
+                      <button
+                        key={char}
+                        type="button"
+                        onClick={() => {
+                          const element = document.getElementById(`bank-group-dash-${char}`);
+                          const container = document.getElementById('bank-scroll-container-dash');
+                          if (element && container) {
+                            container.scrollTo({
+                              top: element.offsetTop - container.offsetTop,
+                              behavior: 'smooth'
+                            });
+                          }
+                        }}
+                        className="text-[8px] font-bold text-zinc-400 hover:text-primary active:text-primary leading-none transition-colors w-3 h-3 flex items-center justify-center rounded-full hover:bg-neutral-gray"
+                      >
+                        {char}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
 
               <div>
