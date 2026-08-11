@@ -3,10 +3,11 @@
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { DB, logSimulation } from '@/services/db';
-import { ShieldCheck, UserPlus, Eye, EyeOff, CheckCircle2, ArrowRight } from 'lucide-react';
+import { DB } from '@/services/db';
+import { ShieldCheck, UserPlus, CheckCircle2, ArrowRight } from 'lucide-react';
 import { useApp } from '@/components/Providers';
 import AffyLogo from '@/components/AffyLogo';
+import { supabase } from '@/services/supabaseClient';
 
 export default function SignupPage() {
   const router = useRouter();
@@ -15,23 +16,16 @@ export default function SignupPage() {
     name: '',
     email: '',
     phone: '',
-    password: '',
   });
-  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
-    if (!formData.name || !formData.email || !formData.phone || !formData.password) {
+    if (!formData.name || !formData.email || !formData.phone) {
       setError('Please fill in all fields.');
-      return;
-    }
-
-    if (formData.password.length < 6) {
-      setError('Password must be at least 6 characters long.');
       return;
     }
 
@@ -41,27 +35,31 @@ export default function SignupPage() {
       return;
     }
 
-    // Generate signup OTP
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    localStorage.setItem(`affy_otp_${formData.email}`, JSON.stringify({ otp, expires: Date.now() + 10 * 60000 }));
+    if (!supabase) {
+      setError('Authentication service is not initialized.');
+      return;
+    }
 
-    // Simulate OTP notifications
-    logSimulation(
-      'WhatsApp',
-      'OTP Verification Code',
-      formData.phone,
-      `Your AFFY SAVINGS OTP is ${otp}. This code expires in 10 minutes. Do not share this code with anyone.`
-    );
-    logSimulation(
-      'Email',
-      'Verify Your Account',
-      formData.email,
-      `Hi ${formData.name},\n\nVerify your account on AFFY SAVINGS using OTP: ${otp}.\n\nBest regards,\nThe AFFY SAVINGS Security Team`
-    );
+    // Call Supabase Auth to generate and send OTP
+    const { error: otpError } = await supabase.auth.signInWithOtp({
+      email: formData.email.toLowerCase(),
+      options: {
+        shouldCreateUser: true,
+        data: {
+          name: formData.name,
+          phone: formData.phone
+        }
+      }
+    });
+
+    if (otpError) {
+      setError(otpError.message);
+      return;
+    }
 
     // Create temporary user profile (not yet verified)
     const newUser = {
-      id: `cust-${Math.random().toString(36).substr(2, 9)}`,
+      id: '', // Will be updated with real Supabase UID on verification
       email: formData.email.toLowerCase(),
       name: formData.name,
       phone: formData.phone,
@@ -77,15 +75,15 @@ export default function SignupPage() {
       created_at: new Date().toISOString()
     };
 
-    // Save temporary credentials & user details
-    localStorage.setItem(`affy_pending_user_${formData.email}`, JSON.stringify({ user: newUser, password: formData.password }));
+    // Save temporary details
+    localStorage.setItem(`affy_pending_user_${formData.email.toLowerCase()}`, JSON.stringify({ user: newUser }));
     
     // Add audit log
     DB.addAuditLog(null, 'User Registration Initiated', { email: formData.email, phone: formData.phone });
 
     setSuccess(true);
     setTimeout(() => {
-      router.push(`/auth/verify?email=${encodeURIComponent(formData.email)}&type=signup`);
+      router.push(`/auth/verify?email=${encodeURIComponent(formData.email.toLowerCase())}&type=signup`);
     }, 1500);
   };
 
@@ -164,26 +162,7 @@ export default function SignupPage() {
               />
             </div>
 
-            {/* Password */}
-            <div className="space-y-1.5">
-              <label className="block text-xs font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider">Secure Password</label>
-              <div className="relative">
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  placeholder="••••••••"
-                  value={formData.password}
-                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                  className={`${inputClasses} pr-12`}
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-4 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-foreground transition-colors cursor-pointer"
-                >
-                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                </button>
-              </div>
-            </div>
+
 
             {/* CTA */}
             <button
