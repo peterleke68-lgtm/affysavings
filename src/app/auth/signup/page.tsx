@@ -177,7 +177,7 @@ export default function SignupPage() {
             <div className="text-center text-xs text-zinc-500">
               Already have an account?{' '}
               <Link href="/auth/login" className="text-primary font-bold hover:underline">
-                Sign In
+                Login
               </Link>
             </div>
           </form>

@@ -356,7 +356,7 @@ export default function AdminPortal() {
                     className={`${inputClasses} font-mono font-bold text-primary`}
                     required
                   />
-                  <span className="block text-[9px] text-zinc-400">Days locked accounts remain absolutely frozen (Demo standard is 90 days).</span>
+                  <span className="block text-[9px] text-zinc-400">Days locked accounts remain absolutely frozen.</span>
                 </div>
 
                 <div className="space-y-1.5">

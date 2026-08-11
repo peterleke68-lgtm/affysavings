@@ -86,7 +86,7 @@ export default function LandingPage() {
             </button>
 
             <Link href="/auth/login" className="text-sm font-bold text-zinc-500 hover:text-primary transition-colors px-3 py-2">
-              Sign In
+              Login
             </Link>
 
             <Link 
@@ -105,10 +105,6 @@ export default function LandingPage() {
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-16 items-center">
           
           <div className="lg:col-span-5 space-y-8 text-center lg:text-left">
-            <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-primary/10 border border-primary/25 text-xs text-primary font-bold font-mono tracking-wide">
-              <Shield size={13} className="text-primary animate-pulse" />
-              <span>Strict Wealth Locking Active</span>
-            </div>
 
             <h1 className="text-4xl sm:text-5xl lg:text-6.5xl font-extrabold tracking-tight leading-none text-gradient">
               {cms.hero.title}
@@ -163,9 +159,8 @@ export default function LandingPage() {
                     <span className="w-3 h-3 rounded-full bg-amber-500/80" />
                     <span className="w-3 h-3 rounded-full bg-emerald-500/80" />
                   </div>
-                  <span className="text-[9px] font-mono font-bold tracking-wider text-zinc-400 dark:text-zinc-500">SAVINGS VAULT : JANE_DOE_CAPITAL</span>
                 </div>
-                <div className="flex items-center gap-1.5 text-xs text-primary font-bold font-mono bg-primary/10 px-2 py-0.5 rounded-full">
+                <div className="flex items-center gap-1.5 text-xs text-primary font-bold bg-primary/10 px-2 py-0.5 rounded-full">
                   <Activity size={10} className="animate-pulse" />
                   <span>ACTIVE</span>
                 </div>
@@ -177,7 +172,7 @@ export default function LandingPage() {
                   <div className="absolute top-0 right-0 w-24 h-24 bg-white/5 rounded-full blur-xl translate-x-4 -translate-y-4" />
                   <div>
                     <div className="text-[10px] opacity-80 uppercase font-bold tracking-widest flex items-center gap-1"><Wallet size={10} /> Liquid Wallet</div>
-                    <div className="text-2xl font-black mt-3 font-mono">
+                    <div className="text-2xl font-black mt-3">
                       ₦14,520,500.00
                     </div>
                   </div>
@@ -189,7 +184,7 @@ export default function LandingPage() {
                 <div className="bg-neutral-gray border border-border/40 p-5 rounded-2xl relative overflow-hidden flex flex-col justify-between min-h-[135px]">
                   <div>
                     <div className="text-[10px] text-zinc-500 dark:text-zinc-400 uppercase font-bold tracking-widest flex items-center gap-1"><TrendingUp size={10} /> Escrow Savings</div>
-                    <div className="text-2xl font-black mt-3 font-mono text-foreground">
+                    <div className="text-2xl font-black mt-3 text-foreground">
                       ₦{((5000 + metricCount) * 1000).toLocaleString('en-US', { minimumFractionDigits: 2 })}
                     </div>
                   </div>
@@ -207,12 +202,12 @@ export default function LandingPage() {
                 <div className="space-y-2">
                   <div className="flex justify-between text-xs font-bold">
                     <span className="flex items-center gap-1.5"><Lock size={12} className="text-red-400" /> Capital Guard (Locked)</span>
-                    <span className="font-mono text-zinc-400 dark:text-zinc-500 text-[10px] font-semibold">90 Days Limit</span>
+                    <span className="text-zinc-400 dark:text-zinc-500 text-[10px] font-semibold">90 Days Limit</span>
                   </div>
                   <div className="w-full bg-neutral-gray h-2 rounded-full overflow-hidden">
                     <div className="bg-red-400 h-full w-[100%]" />
                   </div>
-                  <div className="flex justify-between text-[9px] text-zinc-500 font-mono">
+                  <div className="flex justify-between text-[9px] text-zinc-500">
                     <span>Saved: ₦3,500,000.00</span>
                     <span className="text-red-400">Locked Vault (Matures in 88d)</span>
                   </div>
@@ -222,12 +217,12 @@ export default function LandingPage() {
                 <div className="space-y-2">
                   <div className="flex justify-between text-xs font-bold">
                     <span className="flex items-center gap-1.5"><Calendar size={12} className="text-amber-500" /> Emergency Backup (Fixed)</span>
-                    <span className="font-mono text-amber-500 text-[10px] font-semibold">60% Reached</span>
+                    <span className="text-amber-500 text-[10px] font-semibold">60% Reached</span>
                   </div>
                   <div className="w-full bg-neutral-gray h-2 rounded-full overflow-hidden">
                     <div className="bg-amber-500 h-full w-[60%]" />
                   </div>
-                  <div className="flex justify-between text-[9px] text-zinc-500 font-mono">
+                  <div className="flex justify-between text-[9px] text-zinc-500">
                     <span>Saved: ₦1,200,000.00</span>
                     <span>Target: ₦2,000,000.00</span>
                   </div>

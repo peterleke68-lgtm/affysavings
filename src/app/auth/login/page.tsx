@@ -180,7 +180,7 @@ export default function LoginPage() {
             style={{ backgroundColor: cms.branding.primaryColor }}
             className="w-full text-white text-sm font-bold py-4 rounded-xl hover:opacity-95 transition-all cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-primary/20 mt-2 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {loading ? 'Processing...' : isStaffEmail ? 'Sign In' : 'Send Verification Code'}
+            {loading ? 'Processing...' : isStaffEmail ? 'Login' : 'Send Verification Code'}
             <ArrowRight size={16} />
           </button>
 
