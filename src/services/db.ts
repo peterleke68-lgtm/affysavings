@@ -204,37 +204,58 @@ export const generateUUID = () => {
   });
 };
 
+// Detailed Supabase error logger
+const logSupabaseError = (context: string, error: any) => {
+  // Silently skip missing table errors (schema not yet applied)
+  if (error?.code === 'PGRST205') {
+    if (!logSupabaseError._warnedTables) logSupabaseError._warnedTables = new Set();
+    if (!logSupabaseError._warnedTables.has(context)) {
+      logSupabaseError._warnedTables.add(context);
+      console.warn(`[Supabase] Table not found for "${context}". Run the schema migration in Supabase to create missing tables.`);
+    }
+    return;
+  }
+  console.error(`[Supabase] Error in ${context}:`, {
+    message: error?.message,
+    details: error?.details,
+    hint: error?.hint,
+    code: error?.code,
+  });
+};
+// Attach mutable property for tracking warned tables
+logSupabaseError._warnedTables = new Set<string>() as Set<string>;
+
 export const syncToSupabase = async (key: string, data: any) => {
   if (!supabase) return;
 
   try {
     if (key === USERS_KEY) {
       const { error } = await supabase.from('users').upsert(data);
-      if (error) console.error("Error syncing users to Supabase:", error);
+      if (error) logSupabaseError('sync users', error);
     } else if (key === WALLETS_KEY) {
       const { error } = await supabase.from('wallets').upsert(data);
-      if (error) console.error("Error syncing wallets to Supabase:", error);
+      if (error) logSupabaseError('sync wallets', error);
     } else if (key === SAVINGS_KEY) {
       const { error } = await supabase.from('savings_plans').upsert(data);
-      if (error) console.error("Error syncing savings_plans to Supabase:", error);
+      if (error) logSupabaseError('sync savings_plans', error);
     } else if (key === TRANSACTIONS_KEY) {
       const { error } = await supabase.from('transactions').upsert(data);
-      if (error) console.error("Error syncing transactions to Supabase:", error);
+      if (error) logSupabaseError('sync transactions', error);
     } else if (key === ACCOUNTS_KEY) {
       const { error } = await supabase.from('linked_accounts').upsert(data);
-      if (error) console.error("Error syncing linked_accounts to Supabase:", error);
+      if (error) logSupabaseError('sync linked_accounts', error);
     } else if (key === BENEFICIARIES_KEY) {
       const { error } = await supabase.from('beneficiaries').upsert(data);
-      if (error) console.error("Error syncing beneficiaries to Supabase:", error);
+      if (error) logSupabaseError('sync beneficiaries', error);
     } else if (key === NOTIFICATIONS_KEY) {
       const { error } = await supabase.from('notifications').upsert(data);
-      if (error) console.error("Error syncing notifications to Supabase:", error);
+      if (error) logSupabaseError('sync notifications', error);
     } else if (key === STAFF_KEY) {
       const { error } = await supabase.from('staff_profiles').upsert(data);
-      if (error) console.error("Error syncing staff_profiles to Supabase:", error);
+      if (error) logSupabaseError('sync staff_profiles', error);
     } else if (key === CMS_KEY) {
       const { error } = await supabase.from('cms_settings').upsert({ key: 'config', value: data });
-      if (error) console.error("Error syncing cms_settings to Supabase:", error);
+      if (error) logSupabaseError('sync cms_settings', error);
     } else if (key === AUDIT_LOGS_KEY) {
       const formattedLogs = data.map((log: any) => ({
         id: log.id,
@@ -246,10 +267,10 @@ export const syncToSupabase = async (key: string, data: any) => {
         created_at: log.created_at
       }));
       const { error } = await supabase.from('audit_logs').upsert(formattedLogs);
-      if (error) console.error("Error syncing audit_logs to Supabase:", error);
+      if (error) logSupabaseError('sync audit_logs', error);
     }
   } catch (e) {
-    console.error("Supabase sync failed:", e);
+    console.error("[Supabase] Sync exception:", e);
   }
 };
 
@@ -260,119 +281,139 @@ export const pullFromSupabase = async () => {
     console.log("Supabase active: syncing database tables...");
     
     // 1. Sync Users
-    const { data: remoteUsers } = await supabase.from('users').select('*');
-    if (remoteUsers && remoteUsers.length > 0) {
+    const { data: remoteUsers, error: usersErr } = await supabase.from('users').select('*');
+    if (usersErr) { logSupabaseError('pull users', usersErr); }
+    else if (remoteUsers && remoteUsers.length > 0) {
       localStorage.setItem(USERS_KEY, JSON.stringify(remoteUsers));
     } else {
       const localUsers = getStorage<User[]>(USERS_KEY, []);
       if (localUsers.length > 0) {
-        await supabase.from('users').upsert(localUsers);
+        const { error } = await supabase.from('users').upsert(localUsers);
+        if (error) logSupabaseError('push users', error);
       }
     }
 
     // 2. Sync Wallets
-    const { data: remoteWallets } = await supabase.from('wallets').select('*');
-    if (remoteWallets && remoteWallets.length > 0) {
+    const { data: remoteWallets, error: walletsErr } = await supabase.from('wallets').select('*');
+    if (walletsErr) { logSupabaseError('pull wallets', walletsErr); }
+    else if (remoteWallets && remoteWallets.length > 0) {
       localStorage.setItem(WALLETS_KEY, JSON.stringify(remoteWallets));
     } else {
       const localWallets = getStorage<Wallet[]>(WALLETS_KEY, []);
       if (localWallets.length > 0) {
-        await supabase.from('wallets').upsert(localWallets);
+        const { error } = await supabase.from('wallets').upsert(localWallets);
+        if (error) logSupabaseError('push wallets', error);
       }
     }
 
     // 3. Sync Savings
-    const { data: remoteSavings } = await supabase.from('savings_plans').select('*');
-    if (remoteSavings && remoteSavings.length > 0) {
+    const { data: remoteSavings, error: savingsErr } = await supabase.from('savings_plans').select('*');
+    if (savingsErr) { logSupabaseError('pull savings_plans', savingsErr); }
+    else if (remoteSavings && remoteSavings.length > 0) {
       localStorage.setItem(SAVINGS_KEY, JSON.stringify(remoteSavings));
     } else {
       const localSavings = getStorage<SavingsPlan[]>(SAVINGS_KEY, []);
       if (localSavings.length > 0) {
-        await supabase.from('savings_plans').upsert(localSavings);
+        const { error } = await supabase.from('savings_plans').upsert(localSavings);
+        if (error) logSupabaseError('push savings_plans', error);
       }
     }
 
     // 4. Sync Transactions
-    const { data: remoteTransactions } = await supabase.from('transactions').select('*');
-    if (remoteTransactions && remoteTransactions.length > 0) {
+    const { data: remoteTransactions, error: txErr } = await supabase.from('transactions').select('*');
+    if (txErr) { logSupabaseError('pull transactions', txErr); }
+    else if (remoteTransactions && remoteTransactions.length > 0) {
       localStorage.setItem(TRANSACTIONS_KEY, JSON.stringify(remoteTransactions));
     } else {
       const localTxs = getStorage<Transaction[]>(TRANSACTIONS_KEY, []);
       if (localTxs.length > 0) {
-        await supabase.from('transactions').upsert(localTxs);
+        const { error } = await supabase.from('transactions').upsert(localTxs);
+        if (error) logSupabaseError('push transactions', error);
       }
     }
 
     // 5. Sync Accounts
-    const { data: remoteAccounts } = await supabase.from('linked_accounts').select('*');
-    if (remoteAccounts && remoteAccounts.length > 0) {
+    const { data: remoteAccounts, error: acctErr } = await supabase.from('linked_accounts').select('*');
+    if (acctErr) { logSupabaseError('pull linked_accounts', acctErr); }
+    else if (remoteAccounts && remoteAccounts.length > 0) {
       localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(remoteAccounts));
     } else {
       const localAccounts = getStorage<LinkedAccount[]>(ACCOUNTS_KEY, []);
       if (localAccounts.length > 0) {
-        await supabase.from('linked_accounts').upsert(localAccounts);
+        const { error } = await supabase.from('linked_accounts').upsert(localAccounts);
+        if (error) logSupabaseError('push linked_accounts', error);
       }
     }
 
     // 6. Sync Beneficiaries
-    const { data: remoteBeneficiaries } = await supabase.from('beneficiaries').select('*');
-    if (remoteBeneficiaries && remoteBeneficiaries.length > 0) {
+    const { data: remoteBeneficiaries, error: benErr } = await supabase.from('beneficiaries').select('*');
+    if (benErr) { logSupabaseError('pull beneficiaries', benErr); }
+    else if (remoteBeneficiaries && remoteBeneficiaries.length > 0) {
       localStorage.setItem(BENEFICIARIES_KEY, JSON.stringify(remoteBeneficiaries));
     } else {
       const localBen = getStorage<Beneficiary[]>(BENEFICIARIES_KEY, []);
       if (localBen.length > 0) {
-        await supabase.from('beneficiaries').upsert(localBen);
+        const { error } = await supabase.from('beneficiaries').upsert(localBen);
+        if (error) logSupabaseError('push beneficiaries', error);
       }
     }
 
     // 7. Sync Notifications
-    const { data: remoteNotifications } = await supabase.from('notifications').select('*');
-    if (remoteNotifications && remoteNotifications.length > 0) {
+    const { data: remoteNotifications, error: notifErr } = await supabase.from('notifications').select('*');
+    if (notifErr) { logSupabaseError('pull notifications', notifErr); }
+    else if (remoteNotifications && remoteNotifications.length > 0) {
       localStorage.setItem(NOTIFICATIONS_KEY, JSON.stringify(remoteNotifications));
     } else {
       const localNotifications = getStorage<SystemNotification[]>(NOTIFICATIONS_KEY, []);
       if (localNotifications.length > 0) {
-        await supabase.from('notifications').upsert(localNotifications);
+        const { error } = await supabase.from('notifications').upsert(localNotifications);
+        if (error) logSupabaseError('push notifications', error);
       }
     }
 
     // 8. Sync Staff
-    const { data: remoteStaff } = await supabase.from('staff_profiles').select('*');
-    if (remoteStaff && remoteStaff.length > 0) {
+    const { data: remoteStaff, error: staffErr } = await supabase.from('staff_profiles').select('*');
+    if (staffErr) { logSupabaseError('pull staff_profiles', staffErr); }
+    else if (remoteStaff && remoteStaff.length > 0) {
       localStorage.setItem(STAFF_KEY, JSON.stringify(remoteStaff));
     } else {
       const localStaff = getStorage<StaffProfile[]>(STAFF_KEY, []);
       if (localStaff.length > 0) {
-        await supabase.from('staff_profiles').upsert(localStaff);
+        const { error } = await supabase.from('staff_profiles').upsert(localStaff);
+        if (error) logSupabaseError('push staff_profiles', error);
       }
     }
 
     // 9. Sync CMS
-    const { data: remoteCMS } = await supabase.from('cms_settings').select('*');
-    if (remoteCMS && remoteCMS.length > 0) {
+    const { data: remoteCMS, error: cmsErr } = await supabase.from('cms_settings').select('*');
+    if (cmsErr) { logSupabaseError('pull cms_settings', cmsErr); }
+    else if (remoteCMS && remoteCMS.length > 0) {
       const configItem = remoteCMS.find((item: any) => item.key === 'config');
       if (configItem) {
         localStorage.setItem(CMS_KEY, JSON.stringify(configItem.value));
       }
     } else {
       const localCMS = getStorage<any>(CMS_KEY, DEFAULT_CMS);
-      await supabase.from('cms_settings').upsert({ key: 'config', value: localCMS });
+      const { error } = await supabase.from('cms_settings').upsert({ key: 'config', value: localCMS });
+      if (error) logSupabaseError('push cms_settings', error);
     }
 
     // 10. Sync Audits
-    const { data: remoteAudit } = await supabase.from('audit_logs').select('*');
-    if (remoteAudit && remoteAudit.length > 0) {
+    const { data: remoteAudit, error: auditErr } = await supabase.from('audit_logs').select('*');
+    if (auditErr) { logSupabaseError('pull audit_logs', auditErr); }
+    else if (remoteAudit && remoteAudit.length > 0) {
       localStorage.setItem(AUDIT_LOGS_KEY, JSON.stringify(remoteAudit));
     } else {
       const localAudit = getStorage<AuditLog[]>(AUDIT_LOGS_KEY, []);
       if (localAudit.length > 0) {
-        await supabase.from('audit_logs').upsert(localAudit);
+        const { error } = await supabase.from('audit_logs').upsert(localAudit);
+        if (error) logSupabaseError('push audit_logs', error);
       }
     }
 
     console.log("Supabase synchronization complete.");
   } catch (e) {
-    console.error("Failed to sync with Supabase:", e);
+    console.error("[Supabase] Pull sync exception:", e);
   }
 };
 
