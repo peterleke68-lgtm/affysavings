@@ -136,7 +136,7 @@ export const DEFAULT_CMS = {
     accountNumber: "8103151999",
     accountName: "AFFY SAVINGS / Support Vault",
     whatsAppNumber: "2348103151999",
-    whatsAppMessage: "Hello Support, I have made a bank transfer of ₦{amount} for deposit. Please verify and credit my wallet. Email: {email}, Name: {name}, Reference: {reference}."
+    whatsAppMessage: "Hello Support, I have made a bank transfer of \u20a6{amount} for deposit. Please verify and credit my wallet. Email: {email}, Name: {name}, Reference: {reference}."
   },
   features: [
     { id: "1", title: "3-Month Locked Vaults", desc: "Lock capital strictly for 90 days. Withdrawals are physically disabled to enforce absolute wealth preservation.", icon: "Lock" },
@@ -151,7 +151,7 @@ export const DEFAULT_CMS = {
   ],
   terms: "AFFY SAVINGS Strict Savings rules enforce strict penalty parameters. All target progressions, compound locked funds, and deactivations are simulated.",
   footer: {
-    copyright: "© 2026 Affy Savings Inc. All rights reserved.",
+    copyright: "\u00a9 2026 Affy Savings Inc. All rights reserved.",
     links: [
       { name: "About Us", href: "#" },
       { name: "CMS Admin", href: "/admin" },
@@ -206,12 +206,22 @@ export const generateUUID = () => {
 
 // Detailed Supabase error logger
 const logSupabaseError = (context: string, error: any) => {
-  // Silently skip missing table errors (schema not yet applied)
-  if (error?.code === 'PGRST205') {
+  // Silently skip missing table / relation errors (schema not yet applied)
+  const code = error?.code;
+  const message = (error?.message || '').toLowerCase();
+  const isTableMissing =
+    code === 'PGRST205' ||    // PostgREST: could not find the relation
+    code === 'PGRST204' ||    // PostgREST: could not find a relationship
+    code === '42P01' ||       // PostgreSQL: undefined_table
+    message.includes('relation') && message.includes('does not exist') ||
+    message.includes('not found') ||
+    error?.status === 404;    // HTTP 404 from REST proxy
+
+  if (isTableMissing) {
     if (!logSupabaseError._warnedTables) logSupabaseError._warnedTables = new Set();
     if (!logSupabaseError._warnedTables.has(context)) {
       logSupabaseError._warnedTables.add(context);
-      console.warn(`[Supabase] Table not found for "${context}". Run the schema migration in Supabase to create missing tables.`);
+      console.warn(`[Supabase] Table not found for "${context}". Run supabase/schema.sql in your Supabase SQL Editor to create missing tables.`);
     }
     return;
   }
@@ -717,7 +727,7 @@ export const DB = {
       status: 'completed',
       reference: `TX-SAV-${Math.floor(10000 + Math.random() * 90000)}`,
       category: 'transfer',
-      description: `Funded ₦${amount.toFixed(2)} to savings: "${plan.name}"`
+      description: `Funded \u20a6${amount.toFixed(2)} to savings: "${plan.name}"`
     });
 
     const user = DB.getUsers().find(u => u.id === plan.user_id);
@@ -727,13 +737,13 @@ export const DB = {
         'Email',
         'Savings Credited Alert',
         user.email,
-        `Hi ${user.name},\n\nWe confirm a deposit of ₦${amount.toFixed(2)} into your savings plan "${plan.name}".\n\nTotal Saved: ₦${plan.saved_amount.toFixed(2)} / Goal: ₦${plan.target_amount.toFixed(2)}.`
+        `Hi ${user.name},\n\nWe confirm a deposit of \u20a6${amount.toFixed(2)} into your savings plan "${plan.name}".\n\nTotal Saved: \u20a6${plan.saved_amount.toFixed(2)} / Goal: \u20a6${plan.target_amount.toFixed(2)}.`
       );
       logSimulation(
         'WhatsApp',
         'Savings Deposit Alert',
         user.phone || '+1 (555) 123-4567',
-        `Affy Savings: Funded ₦${amount.toFixed(2)} into "${plan.name}". Saved: ₦${plan.saved_amount.toFixed(2)}.`
+        `Affy Savings: Funded \u20a6${amount.toFixed(2)} into "${plan.name}". Saved: \u20a6${plan.saved_amount.toFixed(2)}.`
       );
     }
 
@@ -795,7 +805,7 @@ export const DB = {
       status: 'completed',
       reference: `TX-BRK-${Math.floor(10000 + Math.random() * 90000)}`,
       category: 'transfer',
-      description: `Liquidated savings "${plan.name}"${penaltyAmount > 0 ? ` (Deducted 5% penalty: ₦${penaltyAmount.toFixed(2)})` : ''}`
+      description: `Liquidated savings "${plan.name}"${penaltyAmount > 0 ? ` (Deducted 5% penalty: \u20a6${penaltyAmount.toFixed(2)})` : ''}`
     });
 
     const user = DB.getUsers().find(u => u.id === plan.user_id);
@@ -805,13 +815,13 @@ export const DB = {
         'Email',
         'Savings Liquidated / Broken Alert',
         user.email,
-        `Hi ${user.name},\n\nYour savings plan "${plan.name}" has been liquidated.\n\nPrincipal: ₦${principal.toFixed(2)}\nPenalty Charged: ₦${penaltyAmount.toFixed(2)}\nAmount Credited to Wallet: ₦${refundAmount.toFixed(2)}.`
+        `Hi ${user.name},\n\nYour savings plan "${plan.name}" has been liquidated.\n\nPrincipal: \u20a6${principal.toFixed(2)}\nPenalty Charged: \u20a6${penaltyAmount.toFixed(2)}\nAmount Credited to Wallet: \u20a6${refundAmount.toFixed(2)}.`
       );
       logSimulation(
         'WhatsApp',
         'Savings Broken Alert',
         user.phone || '+1 (555) 123-4567',
-        `Affy Savings: Liquidated "${plan.name}". Refunded to wallet: ₦${refundAmount.toFixed(2)}.${penaltyAmount > 0 ? ` (Penalty: ₦${penaltyAmount.toFixed(2)})` : ''}`
+        `Affy Savings: Liquidated "${plan.name}". Refunded to wallet: \u20a6${refundAmount.toFixed(2)}.${penaltyAmount > 0 ? ` (Penalty: \u20a6${penaltyAmount.toFixed(2)})` : ''}`
       );
     }
 
