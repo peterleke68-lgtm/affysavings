@@ -206,14 +206,18 @@ export const generateUUID = () => {
 
 // Detailed Supabase error logger
 const logSupabaseError = (context: string, error: any) => {
-  // Silently skip missing table / relation errors (schema not yet applied)
-  const code = error?.code;
-  const message = (error?.message || '').toLowerCase();
+  if (!error) return;
+
+  const code = error?.code || error?.status;
+  const rawMsg = error?.message || error?.details || error?.hint || (typeof error === 'string' ? error : '');
+  const message = String(rawMsg).toLowerCase();
+
+  // 1. Missing table / relation errors (schema not yet applied)
   const isTableMissing =
     code === 'PGRST205' ||    // PostgREST: could not find the relation
     code === 'PGRST204' ||    // PostgREST: could not find a relationship
     code === '42P01' ||       // PostgreSQL: undefined_table
-    message.includes('relation') && message.includes('does not exist') ||
+    (message.includes('relation') && message.includes('does not exist')) ||
     message.includes('not found') ||
     error?.status === 404;    // HTTP 404 from REST proxy
 
@@ -225,15 +229,38 @@ const logSupabaseError = (context: string, error: any) => {
     }
     return;
   }
-  console.error(`[Supabase] Error in ${context}:`, {
-    message: error?.message,
-    details: error?.details,
-    hint: error?.hint,
-    code: error?.code,
-  });
+
+  // 2. RLS Policy / Unauthenticated Guest Permission errors (Security Working as Designed)
+  const isRLSPermissionDenied =
+    code === '42501' ||       // PostgreSQL: insufficient_privilege / RLS violation
+    code === 'PGRST301' ||    // PostgREST: JWT unauthorized
+    error?.status === 401 ||
+    error?.status === 403 ||
+    message.includes('row-level security') ||
+    message.includes('permission denied') ||
+    message.includes('violates row-level security');
+
+  if (isRLSPermissionDenied) {
+    if (!logSupabaseError._warnedRLS) logSupabaseError._warnedRLS = new Set();
+    if (!logSupabaseError._warnedRLS.has(context)) {
+      logSupabaseError._warnedRLS.add(context);
+      console.info(`[Supabase] Guest notice for "${context}": RLS policies active. User login required for remote data sync.`);
+    }
+    return;
+  }
+
+  const errOutput = {
+    message: error?.message || error?.details || error?.hint || 'Supabase request returned error status',
+    code: error?.code || error?.status || 'UNKNOWN',
+    details: error?.details || null,
+    hint: error?.hint || null,
+  };
+
+  console.error(`[Supabase] Error in ${context}:`, errOutput);
 };
-// Attach mutable property for tracking warned tables
+// Attach mutable properties for tracking warned contexts
 logSupabaseError._warnedTables = new Set<string>() as Set<string>;
+logSupabaseError._warnedRLS = new Set<string>() as Set<string>;
 
 export const syncToSupabase = async (key: string, data: any) => {
   if (!supabase) return;
