@@ -1,8 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { initializeDB, DB, getSimulationLogs, clearSimulationLogs, NotificationLog, User, StaffProfile, pullFromSupabase } from '@/services/db';
-import { Mail, MessageSquare, Terminal, X, ChevronDown, ChevronUp, BellRing } from 'lucide-react';
+import { initializeDB, DB, User, StaffProfile, pullFromSupabase } from '@/services/db';
 
 interface AppContextProps {
   currentUser: User | null;
@@ -28,9 +27,6 @@ export default function Providers({ children }: { children: React.ReactNode }) {
   const [currentStaff, setCurrentStaffState] = useState<StaffProfile | null>(null);
   const [theme, setTheme] = useState<'light' | 'dark'>('dark');
   const [cms, setCms] = useState<any>(null);
-  const [simLogs, setSimLogs] = useState<NotificationLog[]>([]);
-  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
-  const [hasNewLog, setHasNewLog] = useState(false);
 
   // Initialize DB and load data
   useEffect(() => {
@@ -44,36 +40,21 @@ export default function Providers({ children }: { children: React.ReactNode }) {
     initDB();
     
     // Load theme setting
-    const savedTheme = localStorage.getItem('affy_theme') as 'light' | 'dark';
-    const initialTheme = savedTheme || 'dark';
-    setTheme(initialTheme);
-    if (initialTheme === 'dark') {
-      document.documentElement.classList.add('dark');
-    } else {
+    const savedTheme = localStorage.getItem('affy_theme') as 'light' | 'dark' | null;
+    if (savedTheme === 'light') {
+      setTheme('light');
       document.documentElement.classList.remove('dark');
+    } else {
+      document.documentElement.classList.add('dark');
     }
-
-    // Load CMS
-    setCms(DB.getCMS());
-    setSimLogs(getSimulationLogs());
-
-    // Listen for custom simulation events
-    const handleSimNotification = () => {
-      setSimLogs(getSimulationLogs());
-      setHasNewLog(true);
-    };
 
     const handleCmsUpdated = () => {
       setCms(DB.getCMS());
     };
 
-    window.addEventListener('sim_notification_triggered', handleSimNotification);
-    window.addEventListener('new_in_app_notification', handleSimNotification);
     window.addEventListener('cms_updated', handleCmsUpdated);
 
     return () => {
-      window.removeEventListener('sim_notification_triggered', handleSimNotification);
-      window.removeEventListener('new_in_app_notification', handleSimNotification);
       window.removeEventListener('cms_updated', handleCmsUpdated);
     };
   }, []);
@@ -109,15 +90,9 @@ export default function Providers({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!cms) return;
     const root = document.documentElement;
-    root.style.setProperty('--primary', cms.branding.primaryColor);
-    root.style.setProperty('--primary-hover', cms.branding.primaryColorDark);
+    if (cms.branding?.primaryColor) root.style.setProperty('--primary', cms.branding.primaryColor);
+    if (cms.branding?.primaryColorDark) root.style.setProperty('--primary-hover', cms.branding.primaryColorDark);
   }, [cms]);
-
-  const handleClearLogs = () => {
-    clearSimulationLogs();
-    setSimLogs([]);
-    setHasNewLog(false);
-  };
 
   if (!cms) {
     return <div className="min-h-screen bg-[#0d0617] flex items-center justify-center text-purple-400 font-mono animate-pulse">Loading Affy Savings Platform...</div>;

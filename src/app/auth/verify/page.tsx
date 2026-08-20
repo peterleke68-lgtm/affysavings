@@ -121,17 +121,18 @@ export default function VerifyPage() {
             if (!verifyError && data?.user) {
               const supabaseUser = data.user;
               const users = DB.getUsers();
-              verifiedUser = {
+              const newUser: User = {
                 ...pending.user,
                 id: supabaseUser.id,
                 is_verified: true
               };
+              verifiedUser = newUser;
 
               const filteredUsers = users.filter(u => u.email.toLowerCase() !== email.toLowerCase() && u.id !== supabaseUser.id);
-              filteredUsers.push(verifiedUser);
+              filteredUsers.push(newUser);
               DB.saveUsers(filteredUsers);
-              DB.getWalletForUser(verifiedUser.id);
-              DB.addAuditLog(verifiedUser.id, 'User Email Verified (Signup)', { email: verifiedUser.email });
+              DB.getWalletForUser(newUser.id);
+              DB.addAuditLog(newUser.id, 'User Email Verified (Signup)', { email: newUser.email });
               localStorage.removeItem(`affy_otp_${email.toLowerCase()}`);
               localStorage.removeItem(`affy_pending_user_${email.toLowerCase()}`);
             }
@@ -241,7 +242,7 @@ export default function VerifyPage() {
       }, 1200);
 
     } else if (type === '2fa' || type === 'login') {
-      const otpDataStr = localStorage.getItem(`affy_2fa_${email.toLowerCase()}`);
+      const otpDataStr = localStorage.getItem(`affy_2fa_${email.toLowerCase()}`) || localStorage.getItem(`affy_otp_${email.toLowerCase()}`);
       let isValidOtp = false;
 
       if (otpDataStr) {

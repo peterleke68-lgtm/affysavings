@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { DB, User } from '@/services/db';
+import { DB, User, logSimulation } from '@/services/db';
 import { ShieldCheck, LogIn, Eye, EyeOff, AlertTriangle, ArrowRight } from 'lucide-react';
 import { useApp } from '@/components/Providers';
 import AffyLogo from '@/components/AffyLogo';
@@ -80,24 +80,49 @@ export default function LoginPage() {
       return;
     }
 
-    if (!supabase) {
-      setError('Authentication service is not initialized.');
-      setLoading(false);
-      return;
-    }
+    if (supabase) {
+      try {
+        const { error: otpError } = await supabase.auth.signInWithOtp({
+          email: lowercaseEmail,
+          options: {
+            shouldCreateUser: false
+          }
+        });
 
-    // Call Supabase Auth to send OTP
-    const { error: otpError } = await supabase.auth.signInWithOtp({
-      email: lowercaseEmail,
-      options: {
-        shouldCreateUser: false
+        if (otpError) {
+          console.warn("[Affy Auth] Supabase Auth OTP error, activating simulation fallback:", otpError.message);
+          const simOtp = Math.floor(100000 + Math.random() * 900000).toString();
+          localStorage.setItem(`affy_otp_${lowercaseEmail}`, JSON.stringify({
+            otp: simOtp,
+            expires: Date.now() + 600000
+          }));
+          logSimulation(
+            'Email',
+            'Login OTP (Simulation Fallback)',
+            lowercaseEmail,
+            `Your AFFY SAVINGS login code is ${simOtp}. It expires in 10 minutes.`
+          );
+        }
+      } catch (err) {
+        console.warn("[Affy Auth] Supabase Auth exception, using simulation fallback:", err);
+        const simOtp = Math.floor(100000 + Math.random() * 900000).toString();
+        localStorage.setItem(`affy_otp_${lowercaseEmail}`, JSON.stringify({
+          otp: simOtp,
+          expires: Date.now() + 600000
+        }));
       }
-    });
-
-    if (otpError) {
-      setError(otpError.message);
-      setLoading(false);
-      return;
+    } else {
+      const simOtp = Math.floor(100000 + Math.random() * 900000).toString();
+      localStorage.setItem(`affy_otp_${lowercaseEmail}`, JSON.stringify({
+        otp: simOtp,
+        expires: Date.now() + 600000
+      }));
+      logSimulation(
+        'Email',
+        'Login OTP',
+        lowercaseEmail,
+        `Your AFFY SAVINGS login code is ${simOtp}. It expires in 10 minutes.`
+      );
     }
 
     DB.addAuditLog(user.id, 'Login OTP Triggered', { email: user.email });

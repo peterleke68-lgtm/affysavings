@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://your-project-ref.supabase.co';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'your-anon-key-here';
 
-let supabaseClient: any = null;
+let supabaseClient: ReturnType<typeof createClient> | null = null;
 
 try {
   const isPlaceholder = 
