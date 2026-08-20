@@ -206,12 +206,22 @@ export const generateUUID = () => {
 
 // Detailed Supabase error logger
 const logSupabaseError = (context: string, error: any) => {
-  // Silently skip missing table errors (schema not yet applied)
-  if (error?.code === 'PGRST205') {
+  // Silently skip missing table / relation errors (schema not yet applied)
+  const code = error?.code;
+  const message = (error?.message || '').toLowerCase();
+  const isTableMissing =
+    code === 'PGRST205' ||    // PostgREST: could not find the relation
+    code === 'PGRST204' ||    // PostgREST: could not find a relationship
+    code === '42P01' ||       // PostgreSQL: undefined_table
+    message.includes('relation') && message.includes('does not exist') ||
+    message.includes('not found') ||
+    error?.status === 404;    // HTTP 404 from REST proxy
+
+  if (isTableMissing) {
     if (!logSupabaseError._warnedTables) logSupabaseError._warnedTables = new Set();
     if (!logSupabaseError._warnedTables.has(context)) {
       logSupabaseError._warnedTables.add(context);
-      console.warn(`[Supabase] Table not found for "${context}". Run the schema migration in Supabase to create missing tables.`);
+      console.warn(`[Supabase] Table not found for "${context}". Run supabase/schema.sql in your Supabase SQL Editor to create missing tables.`);
     }
     return;
   }
