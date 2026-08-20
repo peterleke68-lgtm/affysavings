@@ -206,14 +206,18 @@ export const generateUUID = () => {
 
 // Detailed Supabase error logger
 const logSupabaseError = (context: string, error: any) => {
-  // Silently skip missing table / relation errors (schema not yet applied)
-  const code = error?.code;
-  const message = (error?.message || '').toLowerCase();
+  if (!error) return;
+
+  const code = error?.code || error?.status;
+  const rawMsg = error?.message || error?.details || error?.hint || (typeof error === 'string' ? error : '');
+  const message = String(rawMsg).toLowerCase();
+
+  // 1. Missing table / relation errors (schema not yet applied)
   const isTableMissing =
     code === 'PGRST205' ||    // PostgREST: could not find the relation
     code === 'PGRST204' ||    // PostgREST: could not find a relationship
     code === '42P01' ||       // PostgreSQL: undefined_table
-    message.includes('relation') && message.includes('does not exist') ||
+    (message.includes('relation') && message.includes('does not exist')) ||
     message.includes('not found') ||
     error?.status === 404;    // HTTP 404 from REST proxy
 
@@ -225,15 +229,38 @@ const logSupabaseError = (context: string, error: any) => {
     }
     return;
   }
-  console.error(`[Supabase] Error in ${context}:`, {
-    message: error?.message,
-    details: error?.details,
-    hint: error?.hint,
-    code: error?.code,
-  });
+
+  // 2. RLS Policy / Unauthenticated Guest Permission errors (Security Working as Designed)
+  const isRLSPermissionDenied =
+    code === '42501' ||       // PostgreSQL: insufficient_privilege / RLS violation
+    code === 'PGRST301' ||    // PostgREST: JWT unauthorized
+    error?.status === 401 ||
+    error?.status === 403 ||
+    message.includes('row-level security') ||
+    message.includes('permission denied') ||
+    message.includes('violates row-level security');
+
+  if (isRLSPermissionDenied) {
+    if (!logSupabaseError._warnedRLS) logSupabaseError._warnedRLS = new Set();
+    if (!logSupabaseError._warnedRLS.has(context)) {
+      logSupabaseError._warnedRLS.add(context);
+      console.info(`[Supabase] Guest notice for "${context}": RLS policies active. User login required for remote data sync.`);
+    }
+    return;
+  }
+
+  const errOutput = {
+    message: error?.message || error?.details || error?.hint || 'Supabase request returned error status',
+    code: error?.code || error?.status || 'UNKNOWN',
+    details: error?.details || null,
+    hint: error?.hint || null,
+  };
+
+  console.error(`[Supabase] Error in ${context}:`, errOutput);
 };
-// Attach mutable property for tracking warned tables
+// Attach mutable properties for tracking warned contexts
 logSupabaseError._warnedTables = new Set<string>() as Set<string>;
+logSupabaseError._warnedRLS = new Set<string>() as Set<string>;
 
 export const syncToSupabase = async (key: string, data: any) => {
   if (!supabase) return;
@@ -727,7 +754,7 @@ export const DB = {
       status: 'completed',
       reference: `TX-SAV-${Math.floor(10000 + Math.random() * 90000)}`,
       category: 'transfer',
-      description: `Funded \u20a6${amount.toFixed(2)} to savings: "${plan.name}"`
+      description: `Funded ₦${amount.toFixed(2)} to savings: "${plan.name}"`
     });
 
     const user = DB.getUsers().find(u => u.id === plan.user_id);
@@ -737,13 +764,13 @@ export const DB = {
         'Email',
         'Savings Credited Alert',
         user.email,
-        `Hi ${user.name},\n\nWe confirm a deposit of \u20a6${amount.toFixed(2)} into your savings plan "${plan.name}".\n\nTotal Saved: \u20a6${plan.saved_amount.toFixed(2)} / Goal: \u20a6${plan.target_amount.toFixed(2)}.`
+        `Hi ${user.name},\n\nWe confirm a deposit of ₦${amount.toFixed(2)} into your savings plan "${plan.name}".\n\nTotal Saved: ₦${plan.saved_amount.toFixed(2)} / Goal: ₦${plan.target_amount.toFixed(2)}.`
       );
       logSimulation(
         'WhatsApp',
         'Savings Deposit Alert',
         user.phone || '+1 (555) 123-4567',
-        `Affy Savings: Funded \u20a6${amount.toFixed(2)} into "${plan.name}". Saved: \u20a6${plan.saved_amount.toFixed(2)}.`
+        `Affy Savings: Funded ₦${amount.toFixed(2)} into "${plan.name}". Saved: ₦${plan.saved_amount.toFixed(2)}.`
       );
     }
 
@@ -805,7 +832,7 @@ export const DB = {
       status: 'completed',
       reference: `TX-BRK-${Math.floor(10000 + Math.random() * 90000)}`,
       category: 'transfer',
-      description: `Liquidated savings "${plan.name}"${penaltyAmount > 0 ? ` (Deducted 5% penalty: \u20a6${penaltyAmount.toFixed(2)})` : ''}`
+      description: `Liquidated savings "${plan.name}"${penaltyAmount > 0 ? ` (Deducted 5% penalty: ₦${penaltyAmount.toFixed(2)})` : ''}`
     });
 
     const user = DB.getUsers().find(u => u.id === plan.user_id);
@@ -815,13 +842,13 @@ export const DB = {
         'Email',
         'Savings Liquidated / Broken Alert',
         user.email,
-        `Hi ${user.name},\n\nYour savings plan "${plan.name}" has been liquidated.\n\nPrincipal: \u20a6${principal.toFixed(2)}\nPenalty Charged: \u20a6${penaltyAmount.toFixed(2)}\nAmount Credited to Wallet: \u20a6${refundAmount.toFixed(2)}.`
+        `Hi ${user.name},\n\nYour savings plan "${plan.name}" has been liquidated.\n\nPrincipal: ₦${principal.toFixed(2)}\nPenalty Charged: ₦${penaltyAmount.toFixed(2)}\nAmount Credited to Wallet: ₦${refundAmount.toFixed(2)}.`
       );
       logSimulation(
         'WhatsApp',
         'Savings Broken Alert',
         user.phone || '+1 (555) 123-4567',
-        `Affy Savings: Liquidated "${plan.name}". Refunded to wallet: \u20a6${refundAmount.toFixed(2)}.${penaltyAmount > 0 ? ` (Penalty: \u20a6${penaltyAmount.toFixed(2)})` : ''}`
+        `Affy Savings: Liquidated "${plan.name}". Refunded to wallet: ₦${refundAmount.toFixed(2)}.${penaltyAmount > 0 ? ` (Penalty: ₦${penaltyAmount.toFixed(2)})` : ''}`
       );
     }
 
