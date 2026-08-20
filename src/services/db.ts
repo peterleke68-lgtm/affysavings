@@ -136,7 +136,7 @@ export const DEFAULT_CMS = {
     accountNumber: "8103151999",
     accountName: "AFFY SAVINGS / Support Vault",
     whatsAppNumber: "2348103151999",
-    whatsAppMessage: "Hello Support, I have made a bank transfer of ₦{amount} for deposit. Please verify and credit my wallet. Email: {email}, Name: {name}, Reference: {reference}."
+    whatsAppMessage: "Hello Support, I have made a bank transfer of \u20a6{amount} for deposit. Please verify and credit my wallet. Email: {email}, Name: {name}, Reference: {reference}."
   },
   features: [
     { id: "1", title: "3-Month Locked Vaults", desc: "Lock capital strictly for 90 days. Withdrawals are physically disabled to enforce absolute wealth preservation.", icon: "Lock" },
@@ -151,7 +151,7 @@ export const DEFAULT_CMS = {
   ],
   terms: "AFFY SAVINGS Strict Savings rules enforce strict penalty parameters. All target progressions, compound locked funds, and deactivations are simulated.",
   footer: {
-    copyright: "© 2026 Affy Savings Inc. All rights reserved.",
+    copyright: "\u00a9 2026 Affy Savings Inc. All rights reserved.",
     links: [
       { name: "About Us", href: "#" },
       { name: "CMS Admin", href: "/admin" },
