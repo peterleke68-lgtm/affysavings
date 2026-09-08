@@ -21,13 +21,16 @@ export async function sendOtpEmail(
   to: string,
   otp: string,
   type: 'signup' | 'login'
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; error?: string; id?: string }> {
+  console.log('[DIAGNOSTIC] Step 4a: sendOtpEmail() entered.');
   const resend = getResendClient();
 
   if (!resend) {
-    console.warn('[Affy Email] Resend API key not configured. OTP will only be available via simulation fallback.');
+    console.warn('[DIAGNOSTIC] Step 4b: Resend API key NOT found or invalid. Bypassing Resend.');
     return { success: false, error: 'Email service not configured' };
   }
+
+  console.log('[DIAGNOSTIC] Step 4c: Resend client ready. Configured sender:', resend.from);
 
   const isSignup = type === 'signup';
   const subject = isSignup
@@ -94,7 +97,8 @@ export async function sendOtpEmail(
 </html>`.trim();
 
   try {
-    const { error } = await resend.client.emails.send({
+    console.log('[DIAGNOSTIC] Step 4d: Executing resend.client.emails.send()');
+    const { data, error } = await resend.client.emails.send({
       from: resend.from,
       to: [to],
       subject,
@@ -102,14 +106,18 @@ export async function sendOtpEmail(
     });
 
     if (error) {
-      console.error('[Affy Email] Resend API error:', error);
+      console.error('[DIAGNOSTIC] Step 4e: resend.emails.send() returned ERROR:', {
+        message: error.message,
+        name: error.name,
+      });
       return { success: false, error: error.message || 'Failed to send email' };
     }
 
-    return { success: true };
+    console.log('[DIAGNOSTIC] Step 4e: resend.emails.send() SUCCESS! Email ID:', data?.id);
+    return { success: true, id: data?.id };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown email delivery error';
-    console.error('[Affy Email] Exception sending email:', message);
+    console.error('[DIAGNOSTIC] Step 4e: resend.emails.send() EXCEPTION:', message);
     return { success: false, error: message };
   }
 }
