@@ -7,7 +7,6 @@ import { DB, logSimulation } from '@/services/db';
 import { ShieldCheck, UserPlus, CheckCircle2, ArrowRight } from 'lucide-react';
 import { useApp } from '@/components/Providers';
 import AffyLogo from '@/components/AffyLogo';
-import { supabase } from '@/services/supabaseClient';
 
 export default function SignupPage() {
   const router = useRouter();
@@ -35,38 +34,52 @@ export default function SignupPage() {
       return;
     }
 
-    // Always generate local simulation OTP as fallback so verification is never blocked by email delivery/rate limits
-    const simOtp = Math.floor(100000 + Math.random() * 900000).toString();
-    localStorage.setItem(`affy_otp_${formData.email.toLowerCase()}`, JSON.stringify({
-      otp: simOtp,
-      expires: Date.now() + 10 * 60000
-    }));
+    const normalizedEmail = formData.email.toLowerCase().trim();
 
-    if (supabase) {
-      try {
-        const { error: otpError } = await supabase.auth.signInWithOtp({
-          email: formData.email.toLowerCase(),
-          options: {
-            shouldCreateUser: true,
-            data: {
-              name: formData.name,
-              phone: formData.phone
-            }
-          }
-        });
+    // Send OTP via our backend API (which uses Resend for email delivery)
+    let simulationOtp: string | null = null;
+    try {
+      const res = await fetch('/api/auth/send-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: normalizedEmail, type: 'signup' }),
+      });
+      const data = await res.json();
 
-        if (otpError) {
-          console.warn("Supabase Auth OTP notice:", otpError);
-        }
-      } catch (err: any) {
-        console.warn("Supabase Auth OTP exception:", err);
+      if (!res.ok) {
+        setError(data.error || 'Failed to send verification code. Please try again.');
+        return;
       }
+
+      // If email delivery failed (no Resend API key), use simulation OTP from server
+      if (!data.emailDelivered && data.simulationOtp) {
+        simulationOtp = data.simulationOtp;
+      }
+    } catch (err) {
+      console.warn('[Affy Auth] send-otp API error, using local simulation fallback:', err);
+      // Generate local simulation OTP as fallback
+      simulationOtp = Math.floor(100000 + Math.random() * 900000).toString();
+    }
+
+    // Store simulation OTP locally for the verify page fallback
+    if (simulationOtp) {
+      localStorage.setItem(`affy_otp_${normalizedEmail}`, JSON.stringify({
+        otp: simulationOtp,
+        expires: Date.now() + 10 * 60000
+      }));
+
+      logSimulation(
+        'Email',
+        'Registration OTP',
+        normalizedEmail,
+        `Welcome to AFFY SAVINGS! Your verification code is ${simulationOtp}. It expires in 10 minutes.`
+      );
     }
 
     // Create temporary user profile (not yet verified)
     const newUser = {
-      id: '', // Will be updated with real Supabase UID on verification
-      email: formData.email.toLowerCase(),
+      id: '',
+      email: normalizedEmail,
       name: formData.name,
       phone: formData.phone,
       avatar_url: '',
@@ -82,22 +95,14 @@ export default function SignupPage() {
     };
 
     // Save temporary details
-    localStorage.setItem(`affy_pending_user_${formData.email.toLowerCase()}`, JSON.stringify({ user: newUser }));
-    
-    // Log simulation notification for developer console/drawer
-    logSimulation(
-      'Email',
-      'Registration OTP',
-      formData.email.toLowerCase(),
-      `Welcome to AFFY SAVINGS! Your verification code is ${simOtp}. It expires in 10 minutes.`
-    );
+    localStorage.setItem(`affy_pending_user_${normalizedEmail}`, JSON.stringify({ user: newUser }));
 
     // Add audit log
     DB.addAuditLog(null, 'User Registration Initiated', { email: formData.email, phone: formData.phone });
 
     setSuccess(true);
     setTimeout(() => {
-      router.push(`/auth/verify?email=${encodeURIComponent(formData.email.toLowerCase())}&type=signup`);
+      router.push(`/auth/verify?email=${encodeURIComponent(normalizedEmail)}&type=signup`);
     }, 1200);
   };
 

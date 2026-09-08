@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useApp } from '@/components/Providers';
-import { DB, logSimulation, Transaction, LinkedAccount, SystemNotification, SavingsPlan } from '@/services/db';
+import { DB, logSimulation, Transaction, LinkedAccount, SystemNotification, SavingsPlan, FoodPackage, FoodItem, FoodOrder } from '@/services/db';
 import AffyLogo from '@/components/AffyLogo';
 import { 
   Wallet, 
@@ -39,7 +39,12 @@ import {
   Award,
   ChevronRight,
   TrendingDown,
-  Check
+  Check,
+  ShoppingBag,
+  Utensils,
+  PackageCheck,
+  Truck,
+  CheckCircle2
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import Link from 'next/link';
@@ -75,10 +80,30 @@ export default function DashboardPage() {
   const [addSavingsModal, setAddSavingsModal] = useState(false);
   const [newSavingsData, setNewSavingsData] = useState({
     name: '',
-    type: 'locked' as 'locked' | 'fixed' | 'target',
+    type: 'locked' as 'locked' | 'fixed' | 'target' | 'food',
     targetAmount: '',
     durationDays: '90' // default to 90 days for locked
   });
+
+  // Food Reserve Maturity Modal State
+  const [foodMaturityModal, setFoodMaturityModal] = useState<{ open: boolean; plan: SavingsPlan | null }>({
+    open: false,
+    plan: null
+  });
+  const [foodTab, setFoodTab] = useState<'packages' | 'custom' | 'rollover' | 'withdraw'>('packages');
+  const [foodPackagesList, setFoodPackagesList] = useState<FoodPackage[]>([]);
+  const [foodItemsList, setFoodItemsList] = useState<FoodItem[]>([]);
+  const [selectedPackageId, setSelectedPackageId] = useState<string>('');
+  const [customBasketQuantities, setCustomBasketQuantities] = useState<Record<string, number>>({});
+  const [deliveryData, setDeliveryData] = useState({
+    address: '',
+    phone: '',
+    notes: ''
+  });
+  const [rolloverDays, setRolloverDays] = useState('60');
+  const [foodActionLoading, setFoodActionLoading] = useState(false);
+  const [foodActionError, setFoodActionError] = useState('');
+  const [foodActionSuccess, setFoodActionSuccess] = useState('');
 
   // Top Up Modal State
   const [topUpModal, setTopUpModal] = useState<{ open: boolean; planId: string }>({ open: false, planId: '' });
@@ -178,6 +203,8 @@ export default function DashboardPage() {
     }
 
     refreshNotifications();
+    setFoodPackagesList(DB.getFoodPackages().filter(p => p.is_available));
+    setFoodItemsList(DB.getFoodItems().filter(i => i.in_stock));
   };
 
   const refreshNotifications = () => {
@@ -631,6 +658,126 @@ export default function DashboardPage() {
     refreshData();
   };
 
+  // 7. FOOD RESERVE MATURITY HANDLERS
+  const customBasketTotal = Object.entries(customBasketQuantities).reduce((sum, [itemId, qty]) => {
+    if (qty <= 0) return sum;
+    const item = foodItemsList.find(i => i.id === itemId);
+    return sum + (item ? item.unit_price * qty : 0);
+  }, 0);
+
+  const handleRedeemPresetPackage = () => {
+    if (!currentUser || !foodMaturityModal.plan || !selectedPackageId) {
+      setFoodActionError("Please select an available food package.");
+      return;
+    }
+    if (!deliveryData.address.trim() || !deliveryData.phone.trim()) {
+      setFoodActionError("Please provide a delivery address and contact phone number.");
+      return;
+    }
+
+    setFoodActionLoading(true);
+    setFoodActionError('');
+
+    const res = DB.redeemFoodReserve({
+      planId: foodMaturityModal.plan.id,
+      orderType: 'preset_package',
+      packageId: selectedPackageId,
+      deliveryAddress: deliveryData.address.trim(),
+      deliveryPhone: deliveryData.phone.trim(),
+      deliveryNotes: deliveryData.notes.trim()
+    });
+
+    setFoodActionLoading(false);
+    if (!res.success) {
+      setFoodActionError(res.error || "Failed to redeem food package.");
+      return;
+    }
+
+    setFoodActionSuccess(`Food order ${res.order?.id} booked! Tracking: ${res.order?.tracking_code}${res.changeRefunded && res.changeRefunded > 0 ? `. ₦${res.changeRefunded.toLocaleString()} change refunded to your wallet.` : ''}`);
+    setTimeout(() => {
+      setFoodMaturityModal({ open: false, plan: null });
+      setFoodActionSuccess('');
+      refreshData();
+    }, 2200);
+  };
+
+  const handleRedeemCustomBasket = () => {
+    if (!currentUser || !foodMaturityModal.plan) return;
+    if (!deliveryData.address.trim() || !deliveryData.phone.trim()) {
+      setFoodActionError("Please provide a delivery address and contact phone number.");
+      return;
+    }
+
+    const itemsToSubmit = Object.entries(customBasketQuantities)
+      .filter(([_, qty]) => qty > 0)
+      .map(([itemId, qty]) => ({ itemId, quantity: qty }));
+
+    if (itemsToSubmit.length === 0) {
+      setFoodActionError("Please add at least one item to your basket.");
+      return;
+    }
+
+    if (customBasketTotal > foodMaturityModal.plan.saved_amount) {
+      setFoodActionError("Basket total exceeds your saved Food Reserve balance.");
+      return;
+    }
+
+    setFoodActionLoading(true);
+    setFoodActionError('');
+
+    const res = DB.redeemFoodReserve({
+      planId: foodMaturityModal.plan.id,
+      orderType: 'custom_basket',
+      customItems: itemsToSubmit,
+      deliveryAddress: deliveryData.address.trim(),
+      deliveryPhone: deliveryData.phone.trim(),
+      deliveryNotes: deliveryData.notes.trim()
+    });
+
+    setFoodActionLoading(false);
+    if (!res.success) {
+      setFoodActionError(res.error || "Failed to redeem custom basket.");
+      return;
+    }
+
+    setFoodActionSuccess(`Custom basket order ${res.order?.id} placed! Tracking: ${res.order?.tracking_code}${res.changeRefunded && res.changeRefunded > 0 ? `. ₦${res.changeRefunded.toLocaleString()} change refunded to your wallet.` : ''}`);
+    setTimeout(() => {
+      setFoodMaturityModal({ open: false, plan: null });
+      setFoodActionSuccess('');
+      refreshData();
+    }, 2200);
+  };
+
+  const handleRolloverFoodPlan = () => {
+    if (!currentUser || !foodMaturityModal.plan) return;
+    const days = parseInt(rolloverDays);
+    if (isNaN(days) || days <= 0) return;
+
+    setFoodActionLoading(true);
+    setFoodActionError('');
+
+    const res = DB.rolloverFoodReserve(foodMaturityModal.plan.id, days);
+    setFoodActionLoading(false);
+
+    if (!res.success) {
+      setFoodActionError(res.error || "Failed to rollover plan.");
+      return;
+    }
+
+    setFoodActionSuccess(`Plan successfully extended by ${days} days! New maturity: ${new Date(res.plan!.end_date).toLocaleDateString()}`);
+    setTimeout(() => {
+      setFoodMaturityModal({ open: false, plan: null });
+      setFoodActionSuccess('');
+      refreshData();
+    }, 1800);
+  };
+
+  const handleWithdrawPolicy = () => {
+    if (!foodMaturityModal.plan) return;
+    handleBreakPlan(foodMaturityModal.plan.id);
+    setFoodMaturityModal({ open: false, plan: null });
+  };
+
   // Default bank linked account change
   const handleDefaultAccountChange = (id: string) => {
     if (!currentUser) return;
@@ -665,6 +812,7 @@ export default function DashboardPage() {
     switch (type) {
       case 'locked': return <Lock size={15} className="text-red-400" />;
       case 'fixed': return <Calendar size={15} className="text-amber-500" />;
+      case 'food': return <ShoppingBag size={15} className="text-emerald-400" />;
       default: return <Target size={15} className="text-primary" />;
     }
   };
@@ -933,6 +1081,8 @@ export default function DashboardPage() {
                   const end = new Date(plan.end_date);
                   const isLockedVal = plan.type === 'locked' && now < end;
                   const isFixedVal = plan.type === 'fixed' && now < end;
+                  const isFoodVal = plan.type === 'food';
+                  const isFoodMatured = isFoodVal && now >= end;
 
                   return (
                     <div key={plan.id} className="bg-card-bg border border-border/40 p-6 rounded-3xl shadow-sm flex flex-col justify-between min-h-[220px] hover-lift">
@@ -940,13 +1090,19 @@ export default function DashboardPage() {
                         <div className="flex items-center justify-between">
                           <span className="flex items-center gap-2 text-xs font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider">
                             {getPlanIcon(plan.type)}
-                            <span>{plan.type} vault</span>
+                            <span>{plan.type === 'food' ? 'Food Reserve' : `${plan.type} vault`}</span>
                           </span>
                           {isLockedVal && (
                             <span className="text-[9px] bg-red-500/10 text-red-500 px-2 py-0.5 rounded-full font-bold">LOCKED</span>
                           )}
                           {isFixedVal && (
                             <span className="text-[9px] bg-amber-500/10 text-amber-500 px-2 py-0.5 rounded-full font-bold font-mono">FIXED</span>
+                          )}
+                          {isFoodVal && !isFoodMatured && (
+                            <span className="text-[9px] bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded-full font-bold font-mono">FOOD RESERVE</span>
+                          )}
+                          {isFoodMatured && (
+                            <span className="text-[9px] bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded-full font-bold font-mono animate-pulse">MATURED</span>
                           )}
                         </div>
                         <h4 className="font-bold text-sm mt-4 text-foreground leading-tight font-display">{plan.name}</h4>
@@ -958,37 +1114,63 @@ export default function DashboardPage() {
                             <span>Target: ₦{plan.target_amount.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                           </div>
                           <div className="w-full bg-neutral-gray h-2 rounded-full overflow-hidden">
-                            <div style={{ width: `${pct}%` }} className={`h-full transition-all duration-500 ${plan.type === 'locked' ? 'bg-red-400' : plan.type === 'fixed' ? 'bg-amber-400' : 'bg-primary'}`} />
+                            <div style={{ width: `${pct}%` }} className={`h-full transition-all duration-500 ${plan.type === 'locked' ? 'bg-red-400' : plan.type === 'fixed' ? 'bg-amber-400' : plan.type === 'food' ? 'bg-emerald-400' : 'bg-primary'}`} />
                           </div>
                           <div className="text-right text-[9px] text-zinc-400 font-bold font-mono">{pct}% Completed</div>
                         </div>
                       </div>
 
                       <div className="mt-5 pt-4 border-t border-border/30 grid grid-cols-2 gap-3 text-xs">
-                        <button
-                          onClick={() => setTopUpModal({ open: true, planId: plan.id })}
-                          className="bg-primary text-white py-2 rounded-xl font-bold hover:opacity-90 transition-opacity cursor-pointer text-center text-[10px]"
-                        >
-                          Top Up
-                        </button>
-                        {isLockedVal ? (
-                          <div className="flex items-center justify-center gap-1.5 bg-red-500/5 text-red-500 rounded-xl text-[10px] font-bold border border-red-500/10">
-                            <Lock size={10} />
-                            <span>{Math.ceil((end.getTime() - now.getTime()) / 86400000)}d Left</span>
+                        {isFoodMatured ? (
+                          <div className="col-span-2">
+                            <button
+                              onClick={() => {
+                                setFoodMaturityModal({ open: true, plan });
+                                setFoodTab('packages');
+                                setFoodActionError('');
+                                setFoodActionSuccess('');
+                                setSelectedPackageId('');
+                                setCustomBasketQuantities({});
+                                setDeliveryData({
+                                  address: '',
+                                  phone: currentUser.phone || '',
+                                  notes: ''
+                                });
+                              }}
+                              className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white py-2.5 rounded-xl font-bold cursor-pointer text-center text-[11px] shadow-md shadow-emerald-900/20 flex items-center justify-center gap-1.5 transition-all"
+                            >
+                              <ShoppingBag size={12} />
+                              <span>Maturity Options</span>
+                            </button>
                           </div>
                         ) : (
-                          <button
-                            onClick={() => {
-                              if (isFixedVal) {
-                                setBreakPlanModal({ open: true, planId: plan.id });
-                              } else {
-                                handleBreakPlan(plan.id);
-                              }
-                            }}
-                            className="bg-red-500/10 text-red-500 hover:bg-red-500/15 py-2 rounded-xl font-bold cursor-pointer text-center text-[10px] transition-colors"
-                          >
-                            Break Plan
-                          </button>
+                          <>
+                            <button
+                              onClick={() => setTopUpModal({ open: true, planId: plan.id })}
+                              className="bg-primary text-white py-2 rounded-xl font-bold hover:opacity-90 transition-opacity cursor-pointer text-center text-[10px]"
+                            >
+                              Top Up
+                            </button>
+                            {isLockedVal ? (
+                              <div className="flex items-center justify-center gap-1.5 bg-red-500/5 text-red-500 rounded-xl text-[10px] font-bold border border-red-500/10">
+                                <Lock size={10} />
+                                <span>{Math.ceil((end.getTime() - now.getTime()) / 86400000)}d Left</span>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => {
+                                  if (isFixedVal || isFoodVal) {
+                                    setBreakPlanModal({ open: true, planId: plan.id });
+                                  } else {
+                                    handleBreakPlan(plan.id);
+                                  }
+                                }}
+                                className="bg-red-500/10 text-red-500 hover:bg-red-500/15 py-2 rounded-xl font-bold cursor-pointer text-center text-[10px] transition-colors"
+                              >
+                                Break Plan
+                              </button>
+                            )}
+                          </>
                         )}
                       </div>
                     </div>
@@ -1320,6 +1502,7 @@ export default function DashboardPage() {
                     <option value="locked">Locked Strategy</option>
                     <option value="fixed">Fixed Target</option>
                     <option value="target">Goal Target</option>
+                    <option value="food">Food Reserve (Commodity Hedge)</option>
                   </select>
                 </div>
 
@@ -1361,6 +1544,7 @@ export default function DashboardPage() {
                 {newSavingsData.type === 'locked' && "🔒 Locked strategy forbids breaking the vault under any browser configuration before maturity."}
                 {newSavingsData.type === 'fixed' && `⚠️ Fixed time target allows breaking before maturity, but triggers a strict ${cms.savingsConfig?.earlyWithdrawalPenalty || 5.0}% penalty payout deduction.`}
                 {newSavingsData.type === 'target' && "🎯 Goal target encourages flexible saves to reach your wealth objective."}
+                {newSavingsData.type === 'food' && "🌾 Food Reserve protects your grocery purchasing power against inflation. Save flexibly towards a food target, and at maturity choose preset hampers, custom grocery baskets, extending, or cash withdrawal per policy."}
               </div>
 
               <button
@@ -1928,6 +2112,390 @@ export default function DashboardPage() {
             >
               Done
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* 9. FOOD RESERVE MATURITY MODAL */}
+      {foodMaturityModal.open && foodMaturityModal.plan && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-50 flex items-center justify-center p-3 md:p-6 overflow-y-auto">
+          <div className="w-full max-w-2xl bg-card-bg border border-border/50 rounded-3xl p-6 md:p-8 shadow-2xl relative my-auto animate-fade-in max-h-[92vh] flex flex-col">
+            <button 
+              onClick={() => {
+                setFoodMaturityModal({ open: false, plan: null });
+                setFoodActionError('');
+                setFoodActionSuccess('');
+              }}
+              className="absolute right-5 top-5 text-zinc-400 hover:text-foreground cursor-pointer p-1 rounded-full hover:bg-neutral-gray"
+            >
+              <X size={18} />
+            </button>
+
+            {/* Header */}
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
+                <ShoppingBag size={20} />
+              </div>
+              <div>
+                <h3 className="text-base font-bold font-display tracking-tight text-foreground">
+                  Food Reserve Matured: {foodMaturityModal.plan.name}
+                </h3>
+                <p className="text-xs text-zinc-400">
+                  Total Saved: <span className="text-emerald-400 font-bold font-mono">₦{foodMaturityModal.plan.saved_amount.toLocaleString(undefined, {minimumFractionDigits: 2})}</span> · Matured on {new Date(foodMaturityModal.plan.end_date).toLocaleDateString()}
+                </p>
+              </div>
+            </div>
+
+            {/* Status alerts */}
+            {foodActionError && (
+              <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-xs text-red-400 font-medium">
+                {foodActionError}
+              </div>
+            )}
+            {foodActionSuccess && (
+              <div className="mb-4 p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-xs text-emerald-400 font-medium flex items-center gap-2">
+                <CheckCircle2 size={16} />
+                <span>{foodActionSuccess}</span>
+              </div>
+            )}
+
+            {/* 4 Tabs */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-5 border-b border-border/30 pb-3">
+              <button
+                onClick={() => { setFoodTab('packages'); setFoodActionError(''); }}
+                className={`py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${foodTab === 'packages' ? 'bg-emerald-500 text-white shadow-md shadow-emerald-500/20' : 'bg-neutral-gray/40 text-zinc-400 hover:text-foreground'}`}
+              >
+                <ShoppingBag size={13} />
+                <span>Food Package</span>
+              </button>
+              <button
+                onClick={() => { setFoodTab('custom'); setFoodActionError(''); }}
+                className={`py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${foodTab === 'custom' ? 'bg-emerald-500 text-white shadow-md shadow-emerald-500/20' : 'bg-neutral-gray/40 text-zinc-400 hover:text-foreground'}`}
+              >
+                <Utensils size={13} />
+                <span>Custom Basket</span>
+              </button>
+              <button
+                onClick={() => { setFoodTab('rollover'); setFoodActionError(''); }}
+                className={`py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${foodTab === 'rollover' ? 'bg-emerald-500 text-white shadow-md shadow-emerald-500/20' : 'bg-neutral-gray/40 text-zinc-400 hover:text-foreground'}`}
+              >
+                <RefreshCw size={13} />
+                <span>Continue Saving</span>
+              </button>
+              <button
+                onClick={() => { setFoodTab('withdraw'); setFoodActionError(''); }}
+                className={`py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${foodTab === 'withdraw' ? 'bg-emerald-500 text-white shadow-md shadow-emerald-500/20' : 'bg-neutral-gray/40 text-zinc-400 hover:text-foreground'}`}
+              >
+                <ArrowDownLeft size={13} />
+                <span>Withdraw Cash</span>
+              </button>
+            </div>
+
+            {/* Tab Body */}
+            <div className="overflow-y-auto flex-1 pr-1 space-y-4">
+              {/* TAB 1: PRESET PACKAGES */}
+              {foodTab === 'packages' && (
+                <div className="space-y-4">
+                  <p className="text-xs text-zinc-400">
+                    Select a curated food package within your saved balance. Any remaining surplus balance is automatically credited back to your liquid wallet.
+                  </p>
+
+                  <div className="space-y-3">
+                    {foodPackagesList.map(pkg => {
+                      const canAfford = foodMaturityModal.plan!.saved_amount >= pkg.price;
+                      const isSelected = selectedPackageId === pkg.id;
+                      const changeAmount = foodMaturityModal.plan!.saved_amount - pkg.price;
+
+                      return (
+                        <div
+                          key={pkg.id}
+                          onClick={() => canAfford && setSelectedPackageId(pkg.id)}
+                          className={`p-4 rounded-2xl border transition-all ${isSelected ? 'border-emerald-500 bg-emerald-500/5 shadow-md' : 'border-border/40 bg-neutral-gray/20'} ${canAfford ? 'cursor-pointer hover:border-emerald-500/50' : 'opacity-60 cursor-not-allowed'}`}
+                        >
+                          <div className="flex items-start justify-between">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${isSelected ? 'border-emerald-500 bg-emerald-500 text-white' : 'border-zinc-500'}`}>
+                                  {isSelected && <Check size={10} />}
+                                </span>
+                                <h4 className="text-xs font-bold text-foreground font-display">{pkg.name}</h4>
+                              </div>
+                              <p className="text-[10px] text-zinc-400 mt-1">{pkg.description}</p>
+                            </div>
+                            <div className="text-right">
+                              <span className="font-extrabold text-foreground font-mono text-xs">₦{pkg.price.toLocaleString()}</span>
+                              {canAfford ? (
+                                <p className="text-[9px] text-emerald-400 font-semibold mt-0.5">Refund: +₦{changeAmount.toLocaleString()}</p>
+                              ) : (
+                                <p className="text-[9px] text-red-400 font-semibold mt-0.5">Insufficient Funds</p>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="mt-3 pt-2.5 border-t border-border/20 grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                            {pkg.items.map((itemStr, idx) => (
+                              <div key={idx} className="flex items-center gap-1.5 text-[10px] text-zinc-300">
+                                <Check size={10} className="text-emerald-400 shrink-0" />
+                                <span>{itemStr}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Delivery Inputs */}
+                  {selectedPackageId && (
+                    <div className="pt-4 border-t border-border/30 space-y-3">
+                      <h5 className="text-xs font-bold text-foreground flex items-center gap-2">
+                        <Truck size={14} className="text-emerald-400" />
+                        <span>Delivery Destination</span>
+                      </h5>
+                      <div>
+                        <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Street Address & City</label>
+                        <input
+                          type="text"
+                          placeholder="e.g. 14 Admiralty Way, Lekki Phase 1, Lagos"
+                          value={deliveryData.address}
+                          onChange={(e) => setDeliveryData({ ...deliveryData, address: e.target.value })}
+                          className="w-full text-xs px-3.5 py-2.5 rounded-xl bg-input-bg border border-border/60 focus:border-emerald-500 focus:outline-none"
+                        />
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Contact Phone</label>
+                          <input
+                            type="tel"
+                            placeholder="e.g. +234 810 000 0000"
+                            value={deliveryData.phone}
+                            onChange={(e) => setDeliveryData({ ...deliveryData, phone: e.target.value })}
+                            className="w-full text-xs px-3.5 py-2.5 rounded-xl bg-input-bg border border-border/60 focus:border-emerald-500 focus:outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Delivery Notes / Landmark</label>
+                          <input
+                            type="text"
+                            placeholder="e.g. Beside Zenith Bank"
+                            value={deliveryData.notes}
+                            onChange={(e) => setDeliveryData({ ...deliveryData, notes: e.target.value })}
+                            className="w-full text-xs px-3.5 py-2.5 rounded-xl bg-input-bg border border-border/60 focus:border-emerald-500 focus:outline-none"
+                          />
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={handleRedeemPresetPackage}
+                        disabled={foodActionLoading}
+                        className="w-full bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold py-3.5 rounded-xl cursor-pointer shadow-lg shadow-emerald-500/20 transition-all flex items-center justify-center gap-2 mt-2"
+                      >
+                        {foodActionLoading ? <RefreshCw size={14} className="animate-spin" /> : <PackageCheck size={14} />}
+                        <span>Confirm Food Package Order</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* TAB 2: CUSTOM BASKET */}
+              {foodTab === 'custom' && (
+                <div className="space-y-4">
+                  {/* Basket Tally Header */}
+                  <div className="p-3 bg-neutral-gray/40 border border-border/40 rounded-2xl flex items-center justify-between">
+                    <div>
+                      <span className="text-[10px] text-zinc-400 uppercase font-bold block">Available Budget</span>
+                      <span className="text-xs font-bold text-foreground font-mono">₦{foodMaturityModal.plan.saved_amount.toLocaleString()}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-zinc-400 uppercase font-bold block">Basket Total</span>
+                      <span className={`text-xs font-bold font-mono ${customBasketTotal > foodMaturityModal.plan.saved_amount ? 'text-red-400' : 'text-emerald-400'}`}>
+                        ₦{customBasketTotal.toLocaleString()}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-zinc-400 uppercase font-bold block">Wallet Refund</span>
+                      <span className="text-xs font-bold text-foreground font-mono">
+                        ₦{Math.max(0, foodMaturityModal.plan.saved_amount - customBasketTotal).toLocaleString()}
+                      </span>
+                    </div>
+                  </div>
+
+                  {customBasketTotal > foodMaturityModal.plan.saved_amount && (
+                    <div className="p-2.5 bg-red-500/10 border border-red-500/30 rounded-xl text-[11px] text-red-400 font-medium">
+                      ⚠️ Basket exceeds your saved Food Reserve balance by ₦{(customBasketTotal - foodMaturityModal.plan.saved_amount).toLocaleString()}. Please reduce quantities.
+                    </div>
+                  )}
+
+                  {/* Items list */}
+                  <div className="space-y-2.5 max-h-56 overflow-y-auto pr-1">
+                    {foodItemsList.map(item => {
+                      const qty = customBasketQuantities[item.id] || 0;
+                      return (
+                        <div key={item.id} className="p-3 bg-neutral-gray/20 border border-border/30 rounded-xl flex items-center justify-between">
+                          <div>
+                            <span className="text-xs font-bold text-foreground block">{item.name}</span>
+                            <span className="text-[10px] text-zinc-400 font-mono">₦{item.unit_price.toLocaleString()} / {item.unit}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => {
+                                if (qty > 0) {
+                                  setCustomBasketQuantities({ ...customBasketQuantities, [item.id]: qty - 1 });
+                                }
+                              }}
+                              className="w-7 h-7 rounded-lg bg-neutral-gray hover:bg-neutral-gray/80 text-foreground font-bold flex items-center justify-center cursor-pointer text-xs"
+                            >
+                              -
+                            </button>
+                            <span className="w-6 text-center font-bold text-xs font-mono text-foreground">{qty}</span>
+                            <button
+                              onClick={() => {
+                                setCustomBasketQuantities({ ...customBasketQuantities, [item.id]: qty + 1 });
+                              }}
+                              className="w-7 h-7 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white font-bold flex items-center justify-center cursor-pointer text-xs"
+                            >
+                              +
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Delivery Inputs */}
+                  <div className="pt-3 border-t border-border/30 space-y-3">
+                    <h5 className="text-xs font-bold text-foreground flex items-center gap-2">
+                      <Truck size={14} className="text-emerald-400" />
+                      <span>Delivery Destination</span>
+                    </h5>
+                    <div>
+                      <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Street Address & City</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. 14 Admiralty Way, Lekki Phase 1, Lagos"
+                        value={deliveryData.address}
+                        onChange={(e) => setDeliveryData({ ...deliveryData, address: e.target.value })}
+                        className="w-full text-xs px-3.5 py-2.5 rounded-xl bg-input-bg border border-border/60 focus:border-emerald-500 focus:outline-none"
+                      />
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Contact Phone</label>
+                        <input
+                          type="tel"
+                          placeholder="e.g. +234 810 000 0000"
+                          value={deliveryData.phone}
+                          onChange={(e) => setDeliveryData({ ...deliveryData, phone: e.target.value })}
+                          className="w-full text-xs px-3.5 py-2.5 rounded-xl bg-input-bg border border-border/60 focus:border-emerald-500 focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Delivery Notes / Landmark</label>
+                        <input
+                          type="text"
+                          placeholder="e.g. Beside Zenith Bank"
+                          value={deliveryData.notes}
+                          onChange={(e) => setDeliveryData({ ...deliveryData, notes: e.target.value })}
+                          className="w-full text-xs px-3.5 py-2.5 rounded-xl bg-input-bg border border-border/60 focus:border-emerald-500 focus:outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={handleRedeemCustomBasket}
+                      disabled={foodActionLoading || customBasketTotal <= 0 || customBasketTotal > foodMaturityModal.plan.saved_amount}
+                      className="w-full bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white text-xs font-bold py-3.5 rounded-xl cursor-pointer shadow-lg shadow-emerald-500/20 transition-all flex items-center justify-center gap-2 mt-2"
+                    >
+                      {foodActionLoading ? <RefreshCw size={14} className="animate-spin" /> : <PackageCheck size={14} />}
+                      <span>Confirm Custom Basket Order (₦{customBasketTotal.toLocaleString()})</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 3: ROLLOVER / EXTEND */}
+              {foodTab === 'rollover' && (
+                <div className="space-y-4 py-2">
+                  <div className="p-4 bg-emerald-500/5 border border-emerald-500/20 rounded-2xl">
+                    <h4 className="text-xs font-bold text-emerald-400 mb-1 flex items-center gap-1.5">
+                      <RefreshCw size={14} />
+                      <span>Extend Food Reserve Period</span>
+                    </h4>
+                    <p className="text-[11px] text-zinc-300 leading-relaxed">
+                      Keep your funds securely hedge-locked against food inflation. Rollover maintains your principal and continues capital protection towards future harvests.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1.5">Select Extension Duration</label>
+                    <select
+                      value={rolloverDays}
+                      onChange={(e) => setRolloverDays(e.target.value)}
+                      className="w-full text-xs px-3.5 py-3 rounded-xl bg-input-bg border border-border/60 focus:border-emerald-500 focus:outline-none"
+                    >
+                      <option value="30">+30 Days (1 Month)</option>
+                      <option value="60">+60 Days (2 Months)</option>
+                      <option value="90">+90 Days (Quarterly Season)</option>
+                      <option value="180">+180 Days (Half Year Hedge)</option>
+                      <option value="365">+365 Days (Annual Reserve)</option>
+                    </select>
+                  </div>
+
+                  <div className="p-3 bg-neutral-gray/30 rounded-xl text-[10px] text-zinc-400">
+                    Current Maturity: {new Date(foodMaturityModal.plan.end_date).toLocaleDateString()}<br />
+                    New Maturity Date: {new Date(Date.now() + parseInt(rolloverDays) * 86400000).toLocaleDateString()}
+                  </div>
+
+                  <button
+                    onClick={handleRolloverFoodPlan}
+                    disabled={foodActionLoading}
+                    className="w-full bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold py-3.5 rounded-xl cursor-pointer shadow-lg shadow-emerald-500/20 transition-all flex items-center justify-center gap-2"
+                  >
+                    {foodActionLoading ? <RefreshCw size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                    <span>Confirm Rollover & Continue Saving</span>
+                  </button>
+                </div>
+              )}
+
+              {/* TAB 4: WITHDRAW CASH PER POLICY */}
+              {foodTab === 'withdraw' && (
+                <div className="space-y-4 py-2">
+                  <div className="p-4 bg-neutral-gray/40 border border-border/40 rounded-2xl space-y-3">
+                    <h4 className="text-xs font-bold text-foreground flex items-center gap-2">
+                      <ArrowDownLeft size={16} className="text-emerald-400" />
+                      <span>Full Policy Cash Liquidation</span>
+                    </h4>
+                    <p className="text-[11px] text-zinc-300 leading-relaxed">
+                      Your Food Reserve has successfully matured. In accordance with policy, 100% of your saved funds will be transferred to your fluid wallet with zero fees.
+                    </p>
+
+                    <div className="p-3 bg-card-bg rounded-xl border border-border/30 space-y-2 text-xs">
+                      <div className="flex justify-between">
+                        <span className="text-zinc-400">Principal Saved:</span>
+                        <span className="font-bold text-foreground font-mono">₦{foodMaturityModal.plan.saved_amount.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-zinc-400">Maturity Breakout Fee:</span>
+                        <span className="font-bold text-emerald-400 font-mono">₦0.00 (0.0% Matured)</span>
+                      </div>
+                      <div className="flex justify-between border-t border-border/30 pt-2 font-bold">
+                        <span className="text-foreground">Wallet Payout:</span>
+                        <span className="text-emerald-400 font-mono text-sm">₦{foodMaturityModal.plan.saved_amount.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={handleWithdrawPolicy}
+                    className="w-full bg-primary hover:bg-primary-hover text-white text-xs font-bold py-3.5 rounded-xl cursor-pointer shadow-lg shadow-primary/20 transition-all flex items-center justify-center gap-2"
+                  >
+                    <ArrowDownLeft size={14} />
+                    <span>Credit ₦{foodMaturityModal.plan.saved_amount.toLocaleString()} to Liquid Wallet</span>
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}

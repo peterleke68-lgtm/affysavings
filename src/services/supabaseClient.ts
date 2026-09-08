@@ -1,5 +1,13 @@
 import { createClient } from '@supabase/supabase-js';
 
+/**
+ * Supabase Client
+ * 
+ * Note: Authentication and OTP verification are self-managed by the application backend
+ * with transactional email delivery via Resend.
+ * This client is used for database operations, storage, and real-time synchronization.
+ */
+
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://your-project-ref.supabase.co';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'your-anon-key-here';
 
@@ -24,3 +32,4 @@ try {
 }
 
 export const supabase = supabaseClient;
+

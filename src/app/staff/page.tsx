@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useApp } from '@/components/Providers';
-import { DB, logSimulation, StaffProfile, User, Transaction, AuditLog, SavingsPlan } from '@/services/db';
+import { DB, logSimulation, StaffProfile, User, Transaction, AuditLog, SavingsPlan, FoodOrder } from '@/services/db';
 import { 
   ArrowLeft, 
   ShieldCheck, 
@@ -24,7 +24,9 @@ import {
   X,
   RefreshCw,
   HelpCircle,
-  Briefcase
+  Briefcase,
+  ShoppingBag,
+  Truck
 } from 'lucide-react';
 import Link from 'next/link';
 import AffyLogo from '@/components/AffyLogo';
@@ -45,6 +47,7 @@ export default function StaffPortal() {
   const [savingsList, setSavingsList] = useState<SavingsPlan[]>([]);
   const [transactionList, setTransactionList] = useState<Transaction[]>([]);
   const [auditList, setAuditList] = useState<AuditLog[]>([]);
+  const [foodOrders, setFoodOrders] = useState<FoodOrder[]>([]);
 
   // Action states
   const [inviteModal, setInviteModal] = useState(false);
@@ -65,6 +68,7 @@ export default function StaffPortal() {
     setSavingsList(DB.getSavingsPlans());
     setTransactionList(DB.getTransactions());
     setAuditList(DB.getAuditLogs());
+    setFoodOrders(DB.getFoodOrders());
   };
 
   useEffect(() => {
@@ -183,6 +187,7 @@ export default function StaffPortal() {
   const totalLockedSavings = savingsList.reduce((acc, plan) => plan.type === 'locked' && plan.status === 'active' ? acc + plan.saved_amount : acc, 0);
   const totalFixedSavings = savingsList.reduce((acc, plan) => plan.type === 'fixed' && plan.status === 'active' ? acc + plan.saved_amount : acc, 0);
   const totalTargetSavings = savingsList.reduce((acc, plan) => plan.type === 'target' && plan.status === 'active' ? acc + plan.saved_amount : acc, 0);
+  const totalFoodSavings = savingsList.reduce((acc, plan) => plan.type === 'food' && plan.status === 'active' ? acc + plan.saved_amount : acc, 0);
 
   const filteredCustomers = customerList.filter(c => 
     c.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
@@ -422,6 +427,70 @@ export default function StaffPortal() {
                   </div>
                 </div>
 
+                {/* Food Orders Fulfillment Overview */}
+                <div className="bg-card-bg border border-border/40 rounded-3xl p-6 shadow-sm space-y-4 text-xs hover-lift">
+                  <div className="flex items-center justify-between pb-3 border-b border-border/30">
+                    <div className="flex items-center gap-2">
+                      <ShoppingBag size={16} className="text-emerald-400" />
+                      <h3 className="font-bold text-sm font-display text-foreground">Food Reserve Orders & Deliveries</h3>
+                    </div>
+                    <span className="text-[10px] bg-emerald-500/10 text-emerald-400 px-2.5 py-0.5 rounded-full font-bold font-mono">
+                      {foodOrders.length} Booked
+                    </span>
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead>
+                        <tr className="border-b border-border/40 text-zinc-400 font-bold uppercase tracking-widest text-[9px]">
+                          <th className="py-3 px-4">Order / Tracking</th>
+                          <th className="py-3 px-4">Client</th>
+                          <th className="py-3 px-4">Type</th>
+                          <th className="py-3 px-4">Value</th>
+                          <th className="py-3 px-4">Delivery To</th>
+                          <th className="py-3 px-4 text-right">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border/30">
+                        {foodOrders.slice(0, 15).map(order => (
+                          <tr key={order.id} className="hover:bg-neutral-gray/30 transition-colors">
+                            <td className="py-3 px-4 font-mono">
+                              <span className="font-bold text-foreground block text-[11px]">{order.id}</span>
+                              <span className="text-[9px] text-emerald-400">{order.tracking_code}</span>
+                            </td>
+                            <td className="py-3 px-4">
+                              <span className="font-bold text-foreground block">{order.user_name}</span>
+                              <span className="text-[10px] text-zinc-400 font-mono">{order.delivery_phone}</span>
+                            </td>
+                            <td className="py-3 px-4 text-[10px] font-semibold text-primary uppercase">
+                              {order.order_type === 'preset_package' ? order.package_name : 'Custom Basket'}
+                            </td>
+                            <td className="py-3 px-4 font-mono font-bold text-foreground">
+                              ₦{order.total_amount.toLocaleString()}
+                            </td>
+                            <td className="py-3 px-4 text-[10px] text-zinc-300 max-w-xs truncate" title={order.delivery_address}>
+                              {order.delivery_address}
+                            </td>
+                            <td className="py-3 px-4 text-right">
+                              <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full uppercase font-mono ${order.status === 'delivered' ? 'bg-emerald-500/10 text-emerald-400' : order.status === 'dispatched' ? 'bg-purple-500/10 text-purple-400' : 'bg-amber-500/10 text-amber-400'}`}>
+                                {order.status}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+
+                        {foodOrders.length === 0 && (
+                          <tr>
+                            <td colSpan={6} className="py-8 text-center text-zinc-400 text-xs">
+                              No food redemption orders booked yet.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
               </div>
             )}
 
@@ -430,7 +499,7 @@ export default function StaffPortal() {
               <div className="space-y-8 animate-fade-in">
                 
                 {/* Aggregate totals cards */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-6">
                   <div className="bg-card-bg border border-border/40 p-5 rounded-3xl shadow-sm text-center hover-lift">
                     <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider block">Locked Strategy Pool</span>
                     <span className="text-xl font-mono font-black mt-2 block text-red-500">₦{totalLockedSavings.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
@@ -444,6 +513,11 @@ export default function StaffPortal() {
                   <div className="bg-card-bg border border-border/40 p-5 rounded-3xl shadow-sm text-center hover-lift">
                     <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider block">Goal Target Pool</span>
                     <span className="text-xl font-mono font-black mt-2 block text-primary">₦{totalTargetSavings.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                  </div>
+
+                  <div className="bg-card-bg border border-border/40 p-5 rounded-3xl shadow-sm text-center hover-lift">
+                    <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider block">Food Reserve Pool</span>
+                    <span className="text-xl font-mono font-black mt-2 block text-emerald-400">₦{totalFoodSavings.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                   </div>
                 </div>
 

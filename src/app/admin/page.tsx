@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useApp } from '@/components/Providers';
-import { DB, User, Transaction, AuditLog, SavingsPlan, logSimulation } from '@/services/db';
+import { DB, User, Transaction, AuditLog, SavingsPlan, logSimulation, FoodPackage, FoodItem, FoodOrder } from '@/services/db';
 import { 
   ArrowLeft, 
   Settings, 
@@ -23,7 +23,16 @@ import {
   Search,
   Activity,
   Plus,
-  X
+  X,
+  ShoppingBag,
+  Utensils,
+  Truck,
+  PackageCheck,
+  Edit,
+  Trash2,
+  Check,
+  Clock,
+  Eye
 } from 'lucide-react';
 import Link from 'next/link';
 import AffyLogo from '@/components/AffyLogo';
@@ -39,13 +48,43 @@ export default function AdminPortal() {
     }
   }, [currentStaff, router]);
 
-  const [activeSubTab, setActiveSubTab] = useState<'cms' | 'users' | 'portfolios' | 'audit' | 'transactions'>('cms');
+  const [activeSubTab, setActiveSubTab] = useState<'cms' | 'users' | 'portfolios' | 'audit' | 'transactions' | 'food_reserve'>('cms');
   
   // Data lists
   const [users, setUsers] = useState<User[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [savingsPlans, setSavingsPlans] = useState<SavingsPlan[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [foodPackages, setFoodPackages] = useState<FoodPackage[]>([]);
+  const [foodItems, setFoodItems] = useState<FoodItem[]>([]);
+  const [foodOrders, setFoodOrders] = useState<FoodOrder[]>([]);
+  const [foodAdminSection, setFoodAdminSection] = useState<'orders' | 'packages' | 'inventory'>('orders');
+
+  // Package modal state
+  const [packageModal, setPackageModal] = useState<{ open: boolean; pkg: FoodPackage | null }>({ open: false, pkg: null });
+  const [packageFormData, setPackageFormData] = useState({
+    name: '',
+    description: '',
+    price: '',
+    itemsStr: '',
+    is_available: true
+  });
+
+  // Item modal state
+  const [itemModal, setItemModal] = useState<{ open: boolean; item: FoodItem | null }>({ open: false, item: null });
+  const [itemFormData, setItemFormData] = useState({
+    name: '',
+    category: 'Grains & Flours' as FoodItem['category'],
+    unit: '',
+    unit_price: '',
+    in_stock: true
+  });
+
+  // Order status update state
+  const [statusModal, setStatusModal] = useState<{ open: boolean; order: FoodOrder | null }>({ open: false, order: null });
+  const [newStatus, setNewStatus] = useState<FoodOrder['status']>('pending');
+  const [trackingNote, setTrackingNote] = useState('');
+  const [foodOrdersSearch, setFoodOrdersSearch] = useState('');
 
   // CMS Form state
   const [cmsForm, setCmsForm] = useState<any>(null);
@@ -70,6 +109,9 @@ export default function AdminPortal() {
     setTransactions(DB.getTransactions());
     setSavingsPlans(DB.getSavingsPlans());
     setAuditLogs(DB.getAuditLogs());
+    setFoodPackages(DB.getFoodPackages());
+    setFoodItems(DB.getFoodItems());
+    setFoodOrders(DB.getFoodOrders());
   };
 
   if (!currentStaff || !cmsForm) {
@@ -234,6 +276,184 @@ export default function AdminPortal() {
     setTimeout(() => setSuccessMsg(''), 3000);
   };
 
+  // FOOD RESERVE MANAGEMENT HANDLERS
+  const handleOpenPackageModal = (pkg?: FoodPackage) => {
+    if (pkg) {
+      setPackageModal({ open: true, pkg });
+      setPackageFormData({
+        name: pkg.name,
+        description: pkg.description,
+        price: pkg.price.toString(),
+        itemsStr: pkg.items.join('\n'),
+        is_available: pkg.is_available
+      });
+    } else {
+      setPackageModal({ open: true, pkg: null });
+      setPackageFormData({
+        name: '',
+        description: '',
+        price: '',
+        itemsStr: '',
+        is_available: true
+      });
+    }
+  };
+
+  const handleSavePackage = (e: React.FormEvent) => {
+    e.preventDefault();
+    const priceNum = parseFloat(packageFormData.price);
+    if (!packageFormData.name.trim() || isNaN(priceNum) || priceNum <= 0) {
+      alert("Please enter a valid package name and price.");
+      return;
+    }
+
+    const items = packageFormData.itemsStr
+      .split('\n')
+      .map(s => s.trim())
+      .filter(s => s.length > 0);
+
+    if (items.length === 0) {
+      alert("Please enter at least one item included in this package.");
+      return;
+    }
+
+    if (packageModal.pkg) {
+      DB.updateFoodPackage(packageModal.pkg.id, {
+        name: packageFormData.name.trim(),
+        description: packageFormData.description.trim(),
+        price: priceNum,
+        items,
+        is_available: packageFormData.is_available
+      });
+      DB.addAuditLog(currentStaff!.id, 'Updated Food Package', { packageId: packageModal.pkg.id, name: packageFormData.name });
+      setSuccessMsg(`Food package "${packageFormData.name}" updated successfully.`);
+    } else {
+      DB.createFoodPackage({
+        name: packageFormData.name.trim(),
+        description: packageFormData.description.trim(),
+        price: priceNum,
+        items,
+        is_available: packageFormData.is_available
+      });
+      DB.addAuditLog(currentStaff!.id, 'Created Food Package', { name: packageFormData.name, price: priceNum });
+      setSuccessMsg(`New food package "${packageFormData.name}" created.`);
+    }
+
+    setPackageModal({ open: false, pkg: null });
+    refreshLists();
+    setTimeout(() => setSuccessMsg(''), 3000);
+  };
+
+  const handleDeletePackage = (id: string) => {
+    if (!confirm("Are you sure you want to delete this food package?")) return;
+    DB.deleteFoodPackage(id);
+    DB.addAuditLog(currentStaff!.id, 'Deleted Food Package', { packageId: id });
+    setSuccessMsg("Food package deleted.");
+    refreshLists();
+    setTimeout(() => setSuccessMsg(''), 3000);
+  };
+
+  const handleTogglePackageAvailability = (pkg: FoodPackage) => {
+    DB.updateFoodPackage(pkg.id, { is_available: !pkg.is_available });
+    DB.addAuditLog(currentStaff!.id, 'Toggled Food Package Availability', { packageId: pkg.id, is_available: !pkg.is_available });
+    refreshLists();
+  };
+
+  const handleOpenItemModal = (item?: FoodItem) => {
+    if (item) {
+      setItemModal({ open: true, item });
+      setItemFormData({
+        name: item.name,
+        category: item.category,
+        unit: item.unit,
+        unit_price: item.unit_price.toString(),
+        in_stock: item.in_stock
+      });
+    } else {
+      setItemModal({ open: true, item: null });
+      setItemFormData({
+        name: '',
+        category: 'Grains & Flours',
+        unit: '',
+        unit_price: '',
+        in_stock: true
+      });
+    }
+  };
+
+  const handleSaveItem = (e: React.FormEvent) => {
+    e.preventDefault();
+    const priceNum = parseFloat(itemFormData.unit_price);
+    if (!itemFormData.name.trim() || !itemFormData.unit.trim() || isNaN(priceNum) || priceNum <= 0) {
+      alert("Please fill in valid name, unit, and unit price.");
+      return;
+    }
+
+    if (itemModal.item) {
+      DB.updateFoodItem(itemModal.item.id, {
+        name: itemFormData.name.trim(),
+        category: itemFormData.category,
+        unit: itemFormData.unit.trim(),
+        unit_price: priceNum,
+        in_stock: itemFormData.in_stock
+      });
+      DB.addAuditLog(currentStaff!.id, 'Updated Grocery Inventory Item', { itemId: itemModal.item.id, name: itemFormData.name });
+      setSuccessMsg(`Item "${itemFormData.name}" updated.`);
+    } else {
+      DB.createFoodItem({
+        name: itemFormData.name.trim(),
+        category: itemFormData.category,
+        unit: itemFormData.unit.trim(),
+        unit_price: priceNum,
+        in_stock: itemFormData.in_stock
+      });
+      DB.addAuditLog(currentStaff!.id, 'Created Grocery Inventory Item', { name: itemFormData.name, price: priceNum });
+      setSuccessMsg(`New item "${itemFormData.name}" added to catalog.`);
+    }
+
+    setItemModal({ open: false, item: null });
+    refreshLists();
+    setTimeout(() => setSuccessMsg(''), 3000);
+  };
+
+  const handleDeleteItem = (id: string) => {
+    if (!confirm("Are you sure you want to remove this item from catalog?")) return;
+    DB.deleteFoodItem(id);
+    DB.addAuditLog(currentStaff!.id, 'Deleted Grocery Inventory Item', { itemId: id });
+    setSuccessMsg("Grocery item deleted.");
+    refreshLists();
+    setTimeout(() => setSuccessMsg(''), 3000);
+  };
+
+  const handleToggleItemStock = (item: FoodItem) => {
+    DB.updateFoodItem(item.id, { in_stock: !item.in_stock });
+    DB.addAuditLog(currentStaff!.id, 'Toggled Grocery Item Stock Status', { itemId: item.id, in_stock: !item.in_stock });
+    refreshLists();
+  };
+
+  const handleOpenStatusModal = (order: FoodOrder) => {
+    setStatusModal({ open: true, order });
+    setNewStatus(order.status);
+    setTrackingNote(order.courier_notes || '');
+  };
+
+  const handleSaveOrderStatus = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!statusModal.order) return;
+
+    DB.updateFoodOrderStatus(statusModal.order.id, newStatus, trackingNote.trim());
+    DB.addAuditLog(currentStaff!.id, 'Updated Food Order Status', {
+      orderId: statusModal.order.id,
+      status: newStatus,
+      trackingNote: trackingNote.trim()
+    });
+
+    setSuccessMsg(`Order ${statusModal.order.id} status updated to ${newStatus.toUpperCase()}. Client notified.`);
+    setStatusModal({ open: false, order: null });
+    refreshLists();
+    setTimeout(() => setSuccessMsg(''), 3000);
+  };
+
   const handleStaffLogout = () => {
     setCurrentStaff(null);
     router.push('/auth/login');
@@ -307,6 +527,21 @@ export default function AdminPortal() {
             className={`pb-3.5 border-b-2 px-1 transition-colors cursor-pointer font-display ${activeSubTab === 'audit' ? 'border-primary text-primary' : 'border-transparent text-zinc-400 hover:text-foreground'}`}
           >
             Compliance Audits
+          </button>
+          <button 
+            onClick={() => {
+              setActiveSubTab('food_reserve');
+              refreshLists();
+            }}
+            className={`pb-3.5 border-b-2 px-1 transition-colors cursor-pointer font-display flex items-center gap-1.5 ${activeSubTab === 'food_reserve' ? 'border-primary text-primary' : 'border-transparent text-zinc-400 hover:text-foreground'}`}
+          >
+            <ShoppingBag size={14} />
+            <span>Food Reserve & Orders</span>
+            {foodOrders.filter(o => o.status === 'pending').length > 0 && (
+              <span className="bg-emerald-500/20 text-emerald-400 text-[10px] font-bold px-1.5 py-0.5 rounded-full font-mono">
+                {foodOrders.filter(o => o.status === 'pending').length}
+              </span>
+            )}
           </button>
         </div>
 
@@ -824,6 +1059,567 @@ export default function AdminPortal() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          </div>
+        )}
+
+        {/* 6. FOOD RESERVE & ORDERS TAB */}
+        {activeSubTab === 'food_reserve' && (
+          <div className="space-y-6 animate-fade-in">
+            {/* Top Metric Cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+              <div className="p-5 bg-card-bg border border-border/40 rounded-3xl shadow-sm">
+                <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider block mb-1">Active Food Reserves</span>
+                <span className="text-xl font-bold font-mono text-emerald-400">
+                  {savingsPlans.filter(p => p.type === 'food' && p.status === 'active').length}
+                </span>
+                <p className="text-[10px] text-zinc-400 mt-1 font-mono">
+                  ₦{savingsPlans.filter(p => p.type === 'food' && p.status === 'active').reduce((sum, p) => sum + p.saved_amount, 0).toLocaleString()} volume
+                </p>
+              </div>
+
+              <div className="p-5 bg-card-bg border border-border/40 rounded-3xl shadow-sm">
+                <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider block mb-1">Total Orders Booked</span>
+                <span className="text-xl font-bold font-mono text-foreground">{foodOrders.length}</span>
+                <p className="text-[10px] text-zinc-400 mt-1 font-mono">
+                  ₦{foodOrders.reduce((sum, o) => sum + o.total_amount, 0).toLocaleString()} redeemed
+                </p>
+              </div>
+
+              <div className="p-5 bg-card-bg border border-border/40 rounded-3xl shadow-sm">
+                <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider block mb-1">Pending Deliveries</span>
+                <span className="text-xl font-bold font-mono text-amber-400">
+                  {foodOrders.filter(o => o.status === 'pending' || o.status === 'processing').length}
+                </span>
+                <p className="text-[10px] text-zinc-400 mt-1">Requires dispatch fulfillment</p>
+              </div>
+
+              <div className="p-5 bg-card-bg border border-border/40 rounded-3xl shadow-sm">
+                <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider block mb-1">Completed Deliveries</span>
+                <span className="text-xl font-bold font-mono text-emerald-400">
+                  {foodOrders.filter(o => o.status === 'delivered').length}
+                </span>
+                <p className="text-[10px] text-zinc-400 mt-1">Fulfilled successfully</p>
+              </div>
+            </div>
+
+            {/* Sub-Section Navigation */}
+            <div className="flex items-center justify-between border-b border-border/30 pb-3">
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setFoodAdminSection('orders')}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${foodAdminSection === 'orders' ? 'bg-primary text-white shadow-sm' : 'bg-neutral-gray/30 text-zinc-400 hover:text-foreground'}`}
+                >
+                  <Truck size={13} />
+                  <span>Orders & Deliveries ({foodOrders.length})</span>
+                </button>
+                <button
+                  onClick={() => setFoodAdminSection('packages')}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${foodAdminSection === 'packages' ? 'bg-primary text-white shadow-sm' : 'bg-neutral-gray/30 text-zinc-400 hover:text-foreground'}`}
+                >
+                  <ShoppingBag size={13} />
+                  <span>Preset Packages ({foodPackages.length})</span>
+                </button>
+                <button
+                  onClick={() => setFoodAdminSection('inventory')}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${foodAdminSection === 'inventory' ? 'bg-primary text-white shadow-sm' : 'bg-neutral-gray/30 text-zinc-400 hover:text-foreground'}`}
+                >
+                  <Utensils size={13} />
+                  <span>Grocery Inventory ({foodItems.length})</span>
+                </button>
+              </div>
+
+              {foodAdminSection === 'packages' && (
+                <button
+                  onClick={() => handleOpenPackageModal()}
+                  className="bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold px-4 py-2 rounded-xl flex items-center gap-1.5 cursor-pointer shadow-sm transition-all"
+                >
+                  <Plus size={14} />
+                  <span>Add Food Package</span>
+                </button>
+              )}
+
+              {foodAdminSection === 'inventory' && (
+                <button
+                  onClick={() => handleOpenItemModal()}
+                  className="bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold px-4 py-2 rounded-xl flex items-center gap-1.5 cursor-pointer shadow-sm transition-all"
+                >
+                  <Plus size={14} />
+                  <span>Add Grocery Item</span>
+                </button>
+              )}
+            </div>
+
+            {/* SECTION 1: ORDERS & DELIVERIES */}
+            {foodAdminSection === 'orders' && (
+              <div className="bg-card-bg border border-border/40 rounded-3xl p-6 shadow-sm space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-sm font-bold text-foreground">Food Redemptions & Dispatch Queue</h3>
+                    <p className="text-[10px] text-zinc-400">Manage order fulfillment, delivery tracking codes, and status notices</p>
+                  </div>
+
+                  <div className="relative">
+                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
+                    <input
+                      type="text"
+                      placeholder="Search orders, customers, phone..."
+                      value={foodOrdersSearch}
+                      onChange={(e) => setFoodOrdersSearch(e.target.value)}
+                      className="text-xs pl-8 pr-3 py-1.5 rounded-xl bg-input-bg border border-border/60 focus:border-primary focus:outline-none w-64"
+                    />
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="border-b border-border/30 text-zinc-400 text-[10px] uppercase tracking-wider font-bold">
+                        <th className="py-3 px-3">Order / Date</th>
+                        <th className="py-3 px-3">Client</th>
+                        <th className="py-3 px-3">Order Type & Items</th>
+                        <th className="py-3 px-3">Value</th>
+                        <th className="py-3 px-3">Delivery Address</th>
+                        <th className="py-3 px-3">Status</th>
+                        <th className="py-3 px-3 text-right">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border/20">
+                      {foodOrders
+                        .filter(o => {
+                          if (!foodOrdersSearch) return true;
+                          const q = foodOrdersSearch.toLowerCase();
+                          return o.id.toLowerCase().includes(q) ||
+                            o.user_name.toLowerCase().includes(q) ||
+                            o.user_email.toLowerCase().includes(q) ||
+                            o.delivery_phone.includes(q) ||
+                            o.tracking_code.toLowerCase().includes(q);
+                        })
+                        .map(order => (
+                          <tr key={order.id} className="hover:bg-neutral-gray/20 transition-colors">
+                            <td className="py-3.5 px-3">
+                              <span className="font-bold text-foreground block font-mono text-[11px]">{order.id}</span>
+                              <span className="text-[9px] text-zinc-400 font-mono">{new Date(order.created_at).toLocaleDateString()}</span>
+                              <span className="text-[9px] text-emerald-400 font-mono block">Trk: {order.tracking_code}</span>
+                            </td>
+                            <td className="py-3.5 px-3">
+                              <span className="font-bold text-foreground block">{order.user_name}</span>
+                              <span className="text-[10px] text-zinc-400">{order.user_email}</span>
+                              <span className="text-[9px] text-zinc-500 block font-mono">{order.delivery_phone}</span>
+                            </td>
+                            <td className="py-3.5 px-3 max-w-xs">
+                              <span className="text-[10px] font-bold uppercase text-primary block">
+                                {order.order_type === 'preset_package' ? order.package_name : 'Custom Basket'}
+                              </span>
+                              {order.custom_items && (
+                                <p className="text-[10px] text-zinc-400 truncate mt-0.5">
+                                  {order.custom_items.map(i => `${i.quantity}x ${i.name}`).join(', ')}
+                                </p>
+                              )}
+                            </td>
+                            <td className="py-3.5 px-3 font-mono">
+                              <span className="font-bold text-foreground">₦{order.total_amount.toLocaleString()}</span>
+                              {order.change_refunded > 0 && (
+                                <span className="text-[9px] text-emerald-400 block">+₦{order.change_refunded.toLocaleString()} change</span>
+                              )}
+                            </td>
+                            <td className="py-3.5 px-3 text-[10px] text-zinc-300 max-w-xs truncate" title={order.delivery_address}>
+                              {order.delivery_address}
+                              {order.delivery_notes && <span className="text-[9px] text-zinc-500 block italic">Notes: {order.delivery_notes}</span>}
+                            </td>
+                            <td className="py-3.5 px-3">
+                              <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full uppercase font-mono ${order.status === 'delivered' ? 'bg-emerald-500/10 text-emerald-400' : order.status === 'dispatched' ? 'bg-purple-500/10 text-purple-400' : order.status === 'processing' ? 'bg-blue-500/10 text-blue-400' : order.status === 'cancelled' ? 'bg-red-500/10 text-red-400' : 'bg-amber-500/10 text-amber-400'}`}>
+                                {order.status}
+                              </span>
+                              {order.courier_notes && (
+                                <p className="text-[9px] text-zinc-400 mt-1 max-w-[120px] truncate" title={order.courier_notes}>
+                                  {order.courier_notes}
+                                </p>
+                              )}
+                            </td>
+                            <td className="py-3.5 px-3 text-right">
+                              <button
+                                onClick={() => handleOpenStatusModal(order)}
+                                className="bg-neutral-gray/60 hover:bg-neutral-gray text-foreground font-bold text-[10px] px-3 py-1.5 rounded-xl cursor-pointer transition-colors"
+                              >
+                                Update Status
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+
+                      {foodOrders.length === 0 && (
+                        <tr>
+                          <td colSpan={7} className="py-12 text-center text-zinc-400 text-xs font-semibold">
+                            No food redemption orders yet. Matured Food Reserve plans will appear here once redeemed.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* SECTION 2: PRESET PACKAGES */}
+            {foodAdminSection === 'packages' && (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                {foodPackages.map(pkg => (
+                  <div key={pkg.id} className="p-5 bg-card-bg border border-border/40 rounded-3xl shadow-sm flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center justify-between mb-3">
+                        <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full uppercase font-mono ${pkg.is_available ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}>
+                          {pkg.is_available ? 'Available' : 'Out of Stock'}
+                        </span>
+                        <span className="font-extrabold text-foreground font-mono text-sm">₦{pkg.price.toLocaleString()}</span>
+                      </div>
+
+                      <h4 className="font-bold text-sm text-foreground mb-1">{pkg.name}</h4>
+                      <p className="text-[11px] text-zinc-400 mb-4">{pkg.description}</p>
+
+                      <div className="space-y-1.5 border-t border-border/20 pt-3 mb-4">
+                        <span className="text-[9px] font-bold uppercase tracking-wider text-zinc-500 block mb-1">Items Included:</span>
+                        {pkg.items.map((item, idx) => (
+                          <div key={idx} className="flex items-center gap-1.5 text-[10px] text-zinc-300">
+                            <Check size={10} className="text-emerald-400 shrink-0" />
+                            <span>{item}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="pt-3 border-t border-border/20 flex items-center justify-between gap-2 text-xs">
+                      <button
+                        onClick={() => handleTogglePackageAvailability(pkg)}
+                        className="text-[10px] font-bold text-zinc-400 hover:text-foreground cursor-pointer"
+                      >
+                        {pkg.is_available ? 'Mark Out of Stock' : 'Mark Available'}
+                      </button>
+
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => handleOpenPackageModal(pkg)}
+                          className="p-1.5 text-zinc-400 hover:text-foreground rounded-lg hover:bg-neutral-gray cursor-pointer"
+                          title="Edit Package"
+                        >
+                          <Edit size={13} />
+                        </button>
+                        <button
+                          onClick={() => handleDeletePackage(pkg.id)}
+                          className="p-1.5 text-red-400 hover:text-red-300 rounded-lg hover:bg-red-500/10 cursor-pointer"
+                          title="Delete Package"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* SECTION 3: GROCERY INVENTORY */}
+            {foodAdminSection === 'inventory' && (
+              <div className="bg-card-bg border border-border/40 rounded-3xl p-6 shadow-sm">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h3 className="text-sm font-bold text-foreground">Custom Basket Grocery Catalog</h3>
+                    <p className="text-[10px] text-zinc-400">Inventory items available for customers to build custom food baskets</p>
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="border-b border-border/30 text-zinc-400 text-[10px] uppercase tracking-wider font-bold">
+                        <th className="py-3 px-3">Item Name</th>
+                        <th className="py-3 px-3">Category</th>
+                        <th className="py-3 px-3">Packaging / Unit</th>
+                        <th className="py-3 px-3">Unit Price</th>
+                        <th className="py-3 px-3">Stock Status</th>
+                        <th className="py-3 px-3 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border/20">
+                      {foodItems.map(item => (
+                        <tr key={item.id} className="hover:bg-neutral-gray/20 transition-colors">
+                          <td className="py-3 px-3 font-bold text-foreground">{item.name}</td>
+                          <td className="py-3 px-3 text-[10px] text-zinc-400">{item.category}</td>
+                          <td className="py-3 px-3 text-[10px] font-mono text-zinc-300">{item.unit}</td>
+                          <td className="py-3 px-3 font-bold font-mono text-foreground">₦{item.unit_price.toLocaleString()}</td>
+                          <td className="py-3 px-3">
+                            <button
+                              onClick={() => handleToggleItemStock(item)}
+                              className={`text-[9px] font-bold px-2 py-0.5 rounded-full uppercase font-mono cursor-pointer ${item.in_stock ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}
+                            >
+                              {item.in_stock ? 'In Stock' : 'Out of Stock'}
+                            </button>
+                          </td>
+                          <td className="py-3 px-3 text-right">
+                            <div className="flex items-center justify-end gap-1">
+                              <button
+                                onClick={() => handleOpenItemModal(item)}
+                                className="p-1.5 text-zinc-400 hover:text-foreground rounded-lg hover:bg-neutral-gray cursor-pointer"
+                              >
+                                <Edit size={13} />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteItem(item.id)}
+                                className="p-1.5 text-red-400 hover:text-red-300 rounded-lg hover:bg-red-500/10 cursor-pointer"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* PACKAGE MODAL */}
+        {packageModal.open && (
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="w-full max-w-md bg-card-bg border border-border/50 rounded-3xl p-6 shadow-2xl relative animate-fade-in">
+              <button
+                onClick={() => setPackageModal({ open: false, pkg: null })}
+                className="absolute right-5 top-5 text-zinc-400 hover:text-foreground cursor-pointer p-1 rounded-full hover:bg-neutral-gray"
+              >
+                <X size={18} />
+              </button>
+
+              <h3 className="text-base font-bold font-display text-foreground mb-1">
+                {packageModal.pkg ? 'Edit Food Package' : 'Create Preset Food Package'}
+              </h3>
+              <p className="text-xs text-zinc-400 mb-5">Configure curated food bundle available for client redemption.</p>
+
+              <form onSubmit={handleSavePackage} className="space-y-3.5 text-xs">
+                <div>
+                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Package Name</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Family Protein & Grain Hamper"
+                    value={packageFormData.name}
+                    onChange={(e) => setPackageFormData({ ...packageFormData, name: e.target.value })}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-input-bg border border-border/60 focus:border-primary focus:outline-none"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Description</label>
+                  <input
+                    type="text"
+                    placeholder="Brief overview of bundle contents..."
+                    value={packageFormData.description}
+                    onChange={(e) => setPackageFormData({ ...packageFormData, description: e.target.value })}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-input-bg border border-border/60 focus:border-primary focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Price (NGN)</label>
+                  <input
+                    type="number"
+                    placeholder="e.g. 75000"
+                    value={packageFormData.price}
+                    onChange={(e) => setPackageFormData({ ...packageFormData, price: e.target.value })}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-input-bg border border-border/60 focus:border-primary focus:outline-none"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Items Included (1 item per line)</label>
+                  <textarea
+                    rows={4}
+                    placeholder={"1x 50kg Royal Rice\n1x 25L Vegetable Oil\n2x Cartons Noodles"}
+                    value={packageFormData.itemsStr}
+                    onChange={(e) => setPackageFormData({ ...packageFormData, itemsStr: e.target.value })}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-input-bg border border-border/60 focus:border-primary focus:outline-none font-mono text-[11px]"
+                    required
+                  />
+                </div>
+
+                <div className="flex items-center gap-2 pt-1">
+                  <input
+                    type="checkbox"
+                    id="pkg_avail"
+                    checked={packageFormData.is_available}
+                    onChange={(e) => setPackageFormData({ ...packageFormData, is_available: e.target.checked })}
+                    className="rounded text-primary focus:ring-0"
+                  />
+                  <label htmlFor="pkg_avail" className="text-xs text-zinc-300 font-semibold cursor-pointer">
+                    Available for client redemption
+                  </label>
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full bg-primary hover:bg-primary-hover text-white py-3 rounded-xl font-bold cursor-pointer transition-opacity mt-4"
+                >
+                  Save Food Package
+                </button>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* ITEM MODAL */}
+        {itemModal.open && (
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="w-full max-w-md bg-card-bg border border-border/50 rounded-3xl p-6 shadow-2xl relative animate-fade-in">
+              <button
+                onClick={() => setItemModal({ open: false, item: null })}
+                className="absolute right-5 top-5 text-zinc-400 hover:text-foreground cursor-pointer p-1 rounded-full hover:bg-neutral-gray"
+              >
+                <X size={18} />
+              </button>
+
+              <h3 className="text-base font-bold font-display text-foreground mb-1">
+                {itemModal.item ? 'Edit Grocery Item' : 'Add Grocery Item'}
+              </h3>
+              <p className="text-xs text-zinc-400 mb-5">Configure individual item in custom basket catalog.</p>
+
+              <form onSubmit={handleSaveItem} className="space-y-3.5 text-xs">
+                <div>
+                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Item Name</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Royal Long Grain Rice"
+                    value={itemFormData.name}
+                    onChange={(e) => setItemFormData({ ...itemFormData, name: e.target.value })}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-input-bg border border-border/60 focus:border-primary focus:outline-none"
+                    required
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Category</label>
+                    <select
+                      value={itemFormData.category}
+                      onChange={(e) => setItemFormData({ ...itemFormData, category: e.target.value as any })}
+                      className="w-full px-3 py-2.5 rounded-xl bg-input-bg border border-border/60 focus:border-primary focus:outline-none"
+                    >
+                      <option value="Grains & Flours">Grains & Flours</option>
+                      <option value="Oils & Condiments">Oils & Condiments</option>
+                      <option value="Proteins & Meat">Proteins & Meat</option>
+                      <option value="Packaged & Household">Packaged & Household</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Unit / Size</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. 50kg Bag"
+                      value={itemFormData.unit}
+                      onChange={(e) => setItemFormData({ ...itemFormData, unit: e.target.value })}
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-input-bg border border-border/60 focus:border-primary focus:outline-none"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Unit Price (NGN)</label>
+                  <input
+                    type="number"
+                    placeholder="e.g. 80000"
+                    value={itemFormData.unit_price}
+                    onChange={(e) => setItemFormData({ ...itemFormData, unit_price: e.target.value })}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-input-bg border border-border/60 focus:border-primary focus:outline-none"
+                    required
+                  />
+                </div>
+
+                <div className="flex items-center gap-2 pt-1">
+                  <input
+                    type="checkbox"
+                    id="item_stock"
+                    checked={itemFormData.in_stock}
+                    onChange={(e) => setItemFormData({ ...itemFormData, in_stock: e.target.checked })}
+                    className="rounded text-primary focus:ring-0"
+                  />
+                  <label htmlFor="item_stock" className="text-xs text-zinc-300 font-semibold cursor-pointer">
+                    In Stock (available for custom baskets)
+                  </label>
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full bg-primary hover:bg-primary-hover text-white py-3 rounded-xl font-bold cursor-pointer transition-opacity mt-4"
+                >
+                  Save Catalog Item
+                </button>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* ORDER STATUS MODAL */}
+        {statusModal.open && statusModal.order && (
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="w-full max-w-md bg-card-bg border border-border/50 rounded-3xl p-6 shadow-2xl relative animate-fade-in">
+              <button
+                onClick={() => setStatusModal({ open: false, order: null })}
+                className="absolute right-5 top-5 text-zinc-400 hover:text-foreground cursor-pointer p-1 rounded-full hover:bg-neutral-gray"
+              >
+                <X size={18} />
+              </button>
+
+              <h3 className="text-base font-bold font-display text-foreground mb-1">
+                Update Order Delivery Status
+              </h3>
+              <p className="text-xs text-zinc-400 mb-4">
+                Order <span className="font-mono text-primary font-bold">{statusModal.order.id}</span> · {statusModal.order.user_name}
+              </p>
+
+              <form onSubmit={handleSaveOrderStatus} className="space-y-3.5 text-xs">
+                <div>
+                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Fulfillment Status</label>
+                  <select
+                    value={newStatus}
+                    onChange={(e) => setNewStatus(e.target.value as any)}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-input-bg border border-border/60 focus:border-primary focus:outline-none font-bold"
+                  >
+                    <option value="pending">Pending (Awaiting fulfillment)</option>
+                    <option value="processing">Processing (Preparing package)</option>
+                    <option value="dispatched">Dispatched (With Courier)</option>
+                    <option value="delivered">Delivered (Completed)</option>
+                    <option value="cancelled">Cancelled (Declined/Terminated)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Courier / Dispatch Notes</label>
+                  <textarea
+                    rows={3}
+                    placeholder="e.g. Dispatched via GIG Logistics. Driver contact: +234 802 000 0000"
+                    value={trackingNote}
+                    onChange={(e) => setTrackingNote(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-input-bg border border-border/60 focus:border-primary focus:outline-none text-xs"
+                  />
+                </div>
+
+                <div className="p-3 bg-neutral-gray/30 rounded-xl text-[10px] text-zinc-400 space-y-1">
+                  <div><strong>Address:</strong> {statusModal.order.delivery_address}</div>
+                  <div><strong>Recipient Phone:</strong> {statusModal.order.delivery_phone}</div>
+                  <div><strong>Tracking Code:</strong> {statusModal.order.tracking_code}</div>
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full bg-emerald-500 hover:bg-emerald-600 text-white py-3 rounded-xl font-bold cursor-pointer transition-opacity mt-4"
+                >
+                  Save Status & Notify Customer
+                </button>
+              </form>
             </div>
           </div>
         )}

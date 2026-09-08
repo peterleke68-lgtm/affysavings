@@ -7,7 +7,6 @@ import { DB, User, logSimulation } from '@/services/db';
 import { ShieldCheck, LogIn, Eye, EyeOff, AlertTriangle, ArrowRight } from 'lucide-react';
 import { useApp } from '@/components/Providers';
 import AffyLogo from '@/components/AffyLogo';
-import { supabase } from '@/services/supabaseClient';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -80,38 +79,36 @@ export default function LoginPage() {
       return;
     }
 
-    if (supabase) {
-      try {
-        const { error: otpError } = await supabase.auth.signInWithOtp({
-          email: lowercaseEmail,
-          options: {
-            shouldCreateUser: false
-          }
-        });
+    // Send OTP via our backend API (which uses Resend for email delivery)
+    try {
+      const res = await fetch('/api/auth/send-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: lowercaseEmail, type: 'login' }),
+      });
+      const data = await res.json();
 
-        if (otpError) {
-          console.warn("[Affy Auth] Supabase Auth OTP error, activating simulation fallback:", otpError.message);
-          const simOtp = Math.floor(100000 + Math.random() * 900000).toString();
-          localStorage.setItem(`affy_otp_${lowercaseEmail}`, JSON.stringify({
-            otp: simOtp,
-            expires: Date.now() + 600000
-          }));
-          logSimulation(
-            'Email',
-            'Login OTP (Simulation Fallback)',
-            lowercaseEmail,
-            `Your AFFY SAVINGS login code is ${simOtp}. It expires in 10 minutes.`
-          );
-        }
-      } catch (err) {
-        console.warn("[Affy Auth] Supabase Auth exception, using simulation fallback:", err);
-        const simOtp = Math.floor(100000 + Math.random() * 900000).toString();
+      if (!res.ok) {
+        setError(data.error || 'Failed to send verification code. Please try again.');
+        setLoading(false);
+        return;
+      }
+
+      // If email delivery failed (no Resend API key), store simulation OTP locally
+      if (!data.emailDelivered && data.simulationOtp) {
         localStorage.setItem(`affy_otp_${lowercaseEmail}`, JSON.stringify({
-          otp: simOtp,
+          otp: data.simulationOtp,
           expires: Date.now() + 600000
         }));
+        logSimulation(
+          'Email',
+          'Login OTP',
+          lowercaseEmail,
+          `Your AFFY SAVINGS login code is ${data.simulationOtp}. It expires in 10 minutes.`
+        );
       }
-    } else {
+    } catch (err) {
+      console.warn('[Affy Auth] send-otp API error, using local simulation fallback:', err);
       const simOtp = Math.floor(100000 + Math.random() * 900000).toString();
       localStorage.setItem(`affy_otp_${lowercaseEmail}`, JSON.stringify({
         otp: simOtp,
@@ -119,7 +116,7 @@ export default function LoginPage() {
       }));
       logSimulation(
         'Email',
-        'Login OTP',
+        'Login OTP (Simulation Fallback)',
         lowercaseEmail,
         `Your AFFY SAVINGS login code is ${simOtp}. It expires in 10 minutes.`
       );

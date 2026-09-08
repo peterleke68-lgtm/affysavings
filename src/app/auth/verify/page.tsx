@@ -6,7 +6,6 @@ import { DB, logSimulation, User } from '@/services/db';
 import { ShieldCheck, ArrowLeft, RefreshCw, KeyRound } from 'lucide-react';
 import { useApp } from '@/components/Providers';
 import AffyLogo from '@/components/AffyLogo';
-import { supabase } from '@/services/supabaseClient';
 
 export default function VerifyPage() {
   const router = useRouter();
@@ -14,7 +13,7 @@ export default function VerifyPage() {
   const { cms, setCurrentUser } = useApp();
   
   const email = searchParams.get('email') || '';
-  const type = searchParams.get('type') || 'signup'; // 'signup' | '2fa'
+  const type = searchParams.get('type') || 'signup'; // 'signup' | '2fa' | 'login'
 
   const [otp, setOtp] = useState(['', '', '', '', '', '']);
   const [error, setError] = useState('');
@@ -90,150 +89,77 @@ export default function VerifyPage() {
       return;
     }
 
-    let verifiedUser: User | null = null;
+    const normalizedEmail = email.toLowerCase().trim();
+    let isServerVerified = false;
 
-    if (supabase) {
-      try {
-        if (type === 'signup') {
-          const pendingUserStr = localStorage.getItem(`affy_pending_user_${email.toLowerCase()}`);
-          if (pendingUserStr) {
-            const pending = JSON.parse(pendingUserStr);
-            
-            // Try 'email' type first (from signInWithOtp), then 'signup' type (from signUp)
-            let { data, error: verifyError } = await supabase.auth.verifyOtp({
-              email: email.toLowerCase(),
-              token: fullOtp,
-              type: 'email'
-            });
+    // Verify OTP with self-managed backend API
+    try {
+      const res = await fetch('/api/auth/verify-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: normalizedEmail, otp: fullOtp, type }),
+      });
 
-            if (verifyError) {
-              const retry = await supabase.auth.verifyOtp({
-                email: email.toLowerCase(),
-                token: fullOtp,
-                type: 'signup'
-              });
-              if (!retry.error && retry.data?.user) {
-                data = retry.data;
-                verifyError = null;
-              }
-            }
-
-            if (!verifyError && data?.user) {
-              const supabaseUser = data.user;
-              const users = DB.getUsers();
-              const newUser: User = {
-                ...pending.user,
-                id: supabaseUser.id,
-                is_verified: true
-              };
-              verifiedUser = newUser;
-
-              const filteredUsers = users.filter(u => u.email.toLowerCase() !== email.toLowerCase() && u.id !== supabaseUser.id);
-              filteredUsers.push(newUser);
-              DB.saveUsers(filteredUsers);
-              DB.getWalletForUser(newUser.id);
-              DB.addAuditLog(newUser.id, 'User Email Verified (Signup)', { email: newUser.email });
-              localStorage.removeItem(`affy_otp_${email.toLowerCase()}`);
-              localStorage.removeItem(`affy_pending_user_${email.toLowerCase()}`);
-            }
-          }
-        } else if (type === '2fa' || type === 'login') {
-          const { data, error: verifyError } = await supabase.auth.verifyOtp({
-            email: email.toLowerCase(),
-            token: fullOtp,
-            type: 'email'
-          });
-
-          if (!verifyError && data?.user) {
-            const supabaseUser = data.user;
-            const users = DB.getUsers();
-            let user = users.find(u => u.email.toLowerCase() === email.toLowerCase() || u.id === supabaseUser.id);
-
-            if (!user) {
-              user = {
-                id: supabaseUser.id,
-                email: supabaseUser.email || email.toLowerCase(),
-                name: supabaseUser.user_metadata?.name || 'User',
-                phone: supabaseUser.user_metadata?.phone || '',
-                avatar_url: supabaseUser.user_metadata?.avatar_url || '',
-                is_verified: true,
-                two_factor_enabled: false,
-                two_factor_secret: '',
-                is_locked: false,
-                failed_attempts: 0,
-                device_tracking: [],
-                created_at: supabaseUser.created_at || new Date().toISOString()
-              };
-              users.push(user);
-              DB.saveUsers(users);
-              DB.getWalletForUser(user.id);
-            }
-            verifiedUser = user;
-            localStorage.removeItem(`affy_2fa_${email.toLowerCase()}`);
-          }
-        }
-      } catch (err) {
-        console.warn("Supabase verifyOtp exception, proceeding to simulation fallback:", err);
+      const data = await res.json();
+      if (res.ok && data.verified) {
+        isServerVerified = true;
+      } else if (!res.ok) {
+        // If the server rejected it explicitly, show error
+        setError(data.error || 'Invalid verification code.');
+        setLoading(false);
+        return;
       }
+    } catch (err) {
+      console.warn('[Affy Auth] verify-otp API network error, trying local simulation fallback:', err);
     }
 
-    // If Supabase auth succeeded, complete flow
-    if (verifiedUser) {
-      setSuccess(true);
-      const targetUser = verifiedUser;
-      setTimeout(() => {
-        setCurrentUser(targetUser);
-        router.push('/dashboard');
-      }, 1200);
-      return;
-    }
-
-    // Fallback: Check local simulation OTP (for testing or if email/Supabase auth skipped)
+    // Process successful verification or fallback verification
     if (type === 'signup') {
-      const otpDataStr = localStorage.getItem(`affy_otp_${email.toLowerCase()}`);
-      const pendingUserStr = localStorage.getItem(`affy_pending_user_${email.toLowerCase()}`);
-
+      const pendingUserStr = localStorage.getItem(`affy_pending_user_${normalizedEmail}`);
       if (!pendingUserStr) {
         setError('Verification session expired or invalid. Please sign up again.');
         setLoading(false);
         return;
       }
 
-      const pending = JSON.parse(pendingUserStr);
-      let isValidOtp = false;
+      let isValidOtp = isServerVerified;
 
-      if (otpDataStr) {
-        const otpData = JSON.parse(otpDataStr);
-        if (fullOtp === otpData.otp && Date.now() <= otpData.expires) {
+      // Local fallback verification check if server was unreachable
+      if (!isValidOtp) {
+        const otpDataStr = localStorage.getItem(`affy_otp_${normalizedEmail}`);
+        if (otpDataStr) {
+          const otpData = JSON.parse(otpDataStr);
+          if (fullOtp === otpData.otp && Date.now() <= otpData.expires) {
+            isValidOtp = true;
+          }
+        }
+        // Universal dev code fallback
+        if (!isValidOtp && fullOtp === '123456') {
           isValidOtp = true;
         }
       }
 
-      // Universal dev verification fallback if code is 123456 or matches sim code
-      if (!isValidOtp && fullOtp === '123456') {
-        isValidOtp = true;
-      }
-
       if (!isValidOtp) {
-        setError('Invalid verification code. Please check your email or simulation drawer for the code.');
+        setError('Invalid verification code. Please check your email or simulation drawer.');
         setLoading(false);
         return;
       }
 
+      const pending = JSON.parse(pendingUserStr);
       const users = DB.getUsers();
       const userToSave: User = {
         ...pending.user,
         id: pending.user.id || `usr-${Math.random().toString(36).substring(2, 10)}`,
-        is_verified: true
+        is_verified: true,
       };
-      
-      const filtered = users.filter(u => u.email.toLowerCase() !== email.toLowerCase());
+
+      const filtered = users.filter(u => u.email.toLowerCase() !== normalizedEmail);
       filtered.push(userToSave);
       DB.saveUsers(filtered);
       DB.getWalletForUser(userToSave.id);
       DB.addAuditLog(userToSave.id, 'User Email Verified (Signup)', { email: userToSave.email });
-      localStorage.removeItem(`affy_otp_${email.toLowerCase()}`);
-      localStorage.removeItem(`affy_pending_user_${email.toLowerCase()}`);
+      localStorage.removeItem(`affy_otp_${normalizedEmail}`);
+      localStorage.removeItem(`affy_pending_user_${normalizedEmail}`);
 
       setSuccess(true);
       setTimeout(() => {
@@ -242,35 +168,38 @@ export default function VerifyPage() {
       }, 1200);
 
     } else if (type === '2fa' || type === 'login') {
-      const otpDataStr = localStorage.getItem(`affy_2fa_${email.toLowerCase()}`) || localStorage.getItem(`affy_otp_${email.toLowerCase()}`);
-      let isValidOtp = false;
+      let isValidOtp = isServerVerified;
 
-      if (otpDataStr) {
-        const otpData = JSON.parse(otpDataStr);
-        if (fullOtp === otpData.otp && Date.now() <= otpData.expires) {
+      // Local fallback check
+      if (!isValidOtp) {
+        const otpDataStr = localStorage.getItem(`affy_2fa_${normalizedEmail}`) || localStorage.getItem(`affy_otp_${normalizedEmail}`);
+        if (otpDataStr) {
+          const otpData = JSON.parse(otpDataStr);
+          if (fullOtp === otpData.otp && Date.now() <= otpData.expires) {
+            isValidOtp = true;
+          }
+        }
+        if (!isValidOtp && fullOtp === '123456') {
           isValidOtp = true;
         }
       }
 
-      if (!isValidOtp && fullOtp === '123456') {
-        isValidOtp = true;
-      }
-
       if (!isValidOtp) {
-        setError('Invalid 2FA code. Please check your verification source.');
+        setError('Invalid verification code. Please check your verification source.');
         setLoading(false);
         return;
       }
 
       const users = DB.getUsers();
-      const user = users.find(u => u.email.toLowerCase() === email.toLowerCase());
+      const user = users.find(u => u.email.toLowerCase() === normalizedEmail);
       if (!user) {
         setError('User profile not found.');
         setLoading(false);
         return;
       }
 
-      localStorage.removeItem(`affy_2fa_${email.toLowerCase()}`);
+      localStorage.removeItem(`affy_2fa_${normalizedEmail}`);
+      localStorage.removeItem(`affy_otp_${normalizedEmail}`);
       setSuccess(true);
       setTimeout(() => {
         setCurrentUser(user);
@@ -284,58 +213,61 @@ export default function VerifyPage() {
     setError('');
     setLoading(true);
 
-    if (supabase) {
-      const isSignup = type === 'signup';
-      
-      // Pull metadata if it exists in local storage pending user
-      let metadata: any = undefined;
-      if (isSignup) {
-        const pendingUserStr = localStorage.getItem(`affy_pending_user_${email.toLowerCase()}`);
-        if (pendingUserStr) {
-          try {
-            const pending = JSON.parse(pendingUserStr);
-            metadata = {
-              name: pending.user.name,
-              phone: pending.user.phone
-            };
-          } catch (_) {}
-        }
-      }
+    const normalizedEmail = email.toLowerCase().trim();
 
-      const { error: otpError } = await supabase.auth.signInWithOtp({
-        email: email.toLowerCase(),
-        options: {
-          shouldCreateUser: isSignup,
-          data: metadata
-        }
+    try {
+      const res = await fetch('/api/auth/resend-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: normalizedEmail, type }),
       });
 
+      const data = await res.json();
       setLoading(false);
 
-      if (otpError) {
-        setError(otpError.message);
-      } else {
+      if (res.ok) {
         setResendCountdown(60);
-        setError('A new verification code has been dispatched to your email.');
+        if (!data.emailDelivered && data.simulationOtp) {
+          // Dev / simulation fallback
+          const storageKey = type === 'signup' ? `affy_otp_${normalizedEmail}` : `affy_2fa_${normalizedEmail}`;
+          localStorage.setItem(storageKey, JSON.stringify({
+            otp: data.simulationOtp,
+            expires: Date.now() + 10 * 60000,
+          }));
+          logSimulation(
+            'Email',
+            'Resent OTP Code',
+            normalizedEmail,
+            `Your new AFFY SAVINGS code is ${data.simulationOtp}. Expires in 10 minutes.`
+          );
+          setError('A new verification code has been dispatched. Check the simulation terminal.');
+        } else {
+          setError('A new verification code has been sent to your email.');
+        }
+        return;
+      } else {
+        setError(data.error || 'Failed to resend code. Please try again.');
+        return;
       }
-    } else {
+    } catch (err) {
+      console.warn('[Affy Auth] resend-otp API error, fallback to local generation:', err);
       const newOtpCode = Math.floor(100000 + Math.random() * 900000).toString();
       
       if (type === 'signup') {
-        localStorage.setItem(`affy_otp_${email}`, JSON.stringify({ otp: newOtpCode, expires: Date.now() + 10 * 60000 }));
+        localStorage.setItem(`affy_otp_${normalizedEmail}`, JSON.stringify({ otp: newOtpCode, expires: Date.now() + 10 * 60000 }));
         logSimulation(
-          'WhatsApp',
+          'Email',
           'Resent OTP Verification Code',
-          '+1 (555) 123-4567',
+          normalizedEmail,
           `Your new AFFY SAVINGS verification code is ${newOtpCode}. Expires in 10 minutes.`
         );
         setError('A new verification code has been dispatched. Check the simulation terminal.');
       } else {
-        localStorage.setItem(`affy_2fa_${email}`, JSON.stringify({ otp: newOtpCode, expires: Date.now() + 5 * 60000 }));
+        localStorage.setItem(`affy_2fa_${normalizedEmail}`, JSON.stringify({ otp: newOtpCode, expires: Date.now() + 5 * 60000 }));
         logSimulation(
           'Email',
           'Resent 2FA OTP',
-          email,
+          normalizedEmail,
           `Your new AFFY SAVINGS 2FA verification code is ${newOtpCode}. Expires in 5 minutes.`
         );
         setError('A new 2FA code has been dispatched. Check the simulation terminal.');
