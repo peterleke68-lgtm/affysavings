@@ -4,13 +4,13 @@ import { Resend } from 'resend';
 // Resend Email Service — transactional email delivery only
 // -------------------------------------------------------------------
 
-const resendApiKey = process.env.RESEND_API_KEY || '';
-const fromEmail = process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev';
-
-let resendClient: Resend | null = null;
-
-if (resendApiKey && resendApiKey !== 're_your_resend_api_key') {
-  resendClient = new Resend(resendApiKey);
+function getResendClient(): { client: Resend; from: string } | null {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey || apiKey === 're_your_resend_api_key') {
+    return null;
+  }
+  const from = process.env.RESEND_FROM_EMAIL || 'Affy Savings <noreply@enquiry.affysavings.name.ng>';
+  return { client: new Resend(apiKey), from };
 }
 
 /**
@@ -22,7 +22,9 @@ export async function sendOtpEmail(
   otp: string,
   type: 'signup' | 'login'
 ): Promise<{ success: boolean; error?: string }> {
-  if (!resendClient) {
+  const resend = getResendClient();
+
+  if (!resend) {
     console.warn('[Affy Email] Resend API key not configured. OTP will only be available via simulation fallback.');
     return { success: false, error: 'Email service not configured' };
   }
@@ -92,8 +94,8 @@ export async function sendOtpEmail(
 </html>`.trim();
 
   try {
-    const { error } = await resendClient.emails.send({
-      from: fromEmail,
+    const { error } = await resend.client.emails.send({
+      from: resend.from,
       to: [to],
       subject,
       html: htmlBody,
