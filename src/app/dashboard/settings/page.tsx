@@ -36,13 +36,13 @@ import Link from 'next/link';
 
 export default function SettingsPage() {
   const router = useRouter();
-  const { currentUser, setCurrentUser, cms, theme, toggleTheme } = useApp();
+  const { currentUser, setCurrentUser, cms, theme, toggleTheme, isLoadingAuth } = useApp();
 
   useEffect(() => {
-    if (!currentUser) {
+    if (!isLoadingAuth && !currentUser) {
       router.push('/auth/login');
     }
-  }, [currentUser, router]);
+  }, [currentUser, isLoadingAuth, router]);
 
   // States
   const [profileData, setProfileData] = useState({

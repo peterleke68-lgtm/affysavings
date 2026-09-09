@@ -299,3 +299,31 @@ drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created
   after insert on auth.users
   for each row execute procedure public.handle_new_user();
+
+
+-- =========================================================================
+-- 11. Persistent Serverless OTP Storage Table (auth_otps)
+-- =========================================================================
+
+create table if not exists public.auth_otps (
+  id uuid default uuid_generate_v4() primary key,
+  email text not null,
+  otp_hash text not null,
+  type text not null check (type in ('signup', 'login')),
+  expires_at timestamp with time zone not null,
+  attempts integer default 0 not null check (attempts >= 0),
+  used boolean default false not null,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+create index if not exists idx_auth_otps_email_used_expires 
+  on public.auth_otps (email, used, expires_at desc);
+
+create index if not exists idx_auth_otps_rate_limit 
+  on public.auth_otps (email, created_at desc);
+
+alter table public.auth_otps enable row level security;
+
+create policy "Service role full access to auth_otps" on public.auth_otps
+  for all using (auth.jwt() ->> 'role' = 'service_role');
+

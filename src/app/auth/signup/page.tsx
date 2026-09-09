@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { DB, logSimulation } from '@/services/db';
+import { DB } from '@/services/db';
 import { ShieldCheck, UserPlus, CheckCircle2, ArrowRight } from 'lucide-react';
 import { useApp } from '@/components/Providers';
 import AffyLogo from '@/components/AffyLogo';
@@ -37,7 +37,6 @@ export default function SignupPage() {
     const normalizedEmail = formData.email.toLowerCase().trim();
 
     // Send OTP via our backend API (which uses Resend for email delivery)
-    let simulationOtp: string | null = null;
     try {
       const res = await fetch('/api/auth/send-otp', {
         method: 'POST',
@@ -50,30 +49,10 @@ export default function SignupPage() {
         setError(data.error || 'Failed to send verification code. Please try again.');
         return;
       }
-
-      // If email delivery failed (no Resend API key), use simulation OTP from server
-      if (!data.emailDelivered && data.simulationOtp) {
-        simulationOtp = data.simulationOtp;
-      }
     } catch (err) {
-      console.warn('[Affy Auth] send-otp API error, using local simulation fallback:', err);
-      // Generate local simulation OTP as fallback
-      simulationOtp = Math.floor(100000 + Math.random() * 900000).toString();
-    }
-
-    // Store simulation OTP locally for the verify page fallback
-    if (simulationOtp) {
-      localStorage.setItem(`affy_otp_${normalizedEmail}`, JSON.stringify({
-        otp: simulationOtp,
-        expires: Date.now() + 10 * 60000
-      }));
-
-      logSimulation(
-        'Email',
-        'Registration OTP',
-        normalizedEmail,
-        `Welcome to AFFY SAVINGS! Your verification code is ${simulationOtp}. It expires in 10 minutes.`
-      );
+      console.warn('[Affy Auth] send-otp API request failed:', err);
+      setError('Unable to reach the server. Please check your connection and try again.');
+      return;
     }
 
     // Create temporary user profile (not yet verified)

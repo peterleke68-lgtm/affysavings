@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { DB, User, logSimulation } from '@/services/db';
+import { DB, User } from '@/services/db';
 import { ShieldCheck, LogIn, Eye, EyeOff, AlertTriangle, ArrowRight } from 'lucide-react';
 import { useApp } from '@/components/Providers';
 import AffyLogo from '@/components/AffyLogo';
@@ -61,25 +61,17 @@ export default function LoginPage() {
     // Customer OTP verification
     setLoading(true);
     const users = DB.getUsers();
-    const userIndex = users.findIndex(u => u.email.toLowerCase() === lowercaseEmail);
+    const user = users.find(u => u.email.toLowerCase() === lowercaseEmail);
 
-    if (userIndex === -1) {
-      setError('No account found with this email. Please sign up first.');
-      setLoading(false);
-      return;
-    }
-
-    const user = users[userIndex];
-
-    // Check lock state
-    if (user.is_locked) {
+    // Check lock state if locally cached
+    if (user?.is_locked) {
       setError('This account has been locked due to multiple suspicious failed login attempts. Please contact Compliance to unlock it.');
       DB.addAuditLog(user.id, 'Blocked Login Attempt (Locked Account)', { email: user.email });
       setLoading(false);
       return;
     }
 
-    // Send OTP via our backend API (which uses Resend for email delivery)
+    // Send OTP via backend API (which uses Resend for email delivery)
     try {
       const res = await fetch('/api/auth/send-otp', {
         method: 'POST',
@@ -93,36 +85,14 @@ export default function LoginPage() {
         setLoading(false);
         return;
       }
-
-      // If email delivery failed (no Resend API key), store simulation OTP locally
-      if (!data.emailDelivered && data.simulationOtp) {
-        localStorage.setItem(`affy_otp_${lowercaseEmail}`, JSON.stringify({
-          otp: data.simulationOtp,
-          expires: Date.now() + 600000
-        }));
-        logSimulation(
-          'Email',
-          'Login OTP',
-          lowercaseEmail,
-          `Your AFFY SAVINGS login code is ${data.simulationOtp}. It expires in 10 minutes.`
-        );
-      }
     } catch (err) {
-      console.warn('[Affy Auth] send-otp API error, using local simulation fallback:', err);
-      const simOtp = Math.floor(100000 + Math.random() * 900000).toString();
-      localStorage.setItem(`affy_otp_${lowercaseEmail}`, JSON.stringify({
-        otp: simOtp,
-        expires: Date.now() + 600000
-      }));
-      logSimulation(
-        'Email',
-        'Login OTP (Simulation Fallback)',
-        lowercaseEmail,
-        `Your AFFY SAVINGS login code is ${simOtp}. It expires in 10 minutes.`
-      );
+      console.warn('[Affy Auth] send-otp API request failed:', err);
+      setError('Unable to reach the server. Please check your connection and try again.');
+      setLoading(false);
+      return;
     }
 
-    DB.addAuditLog(user.id, 'Login OTP Triggered', { email: user.email });
+    DB.addAuditLog(user ? user.id : null, 'Login OTP Triggered', { email: lowercaseEmail });
     router.push(`/auth/verify?email=${encodeURIComponent(lowercaseEmail)}&type=login`);
   };
 

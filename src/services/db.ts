@@ -378,12 +378,6 @@ export const syncToSupabase = async (key: string, data: any) => {
   if (!supabase) return;
 
   try {
-    // Skip remote database sync for protected tables if user is not authenticated
-    if (key !== CMS_KEY) {
-      const { data: authData } = await supabase.auth.getSession();
-      if (!authData?.session) return;
-    }
-
     if (key === USERS_KEY) {
       const { error } = await supabase.from('users').upsert(data as any);
       if (error) logSupabaseError('sync users', error);
@@ -433,64 +427,58 @@ export const pullFromSupabase = async () => {
   if (!supabase) return;
   
   try {
-    const { data: authData } = await supabase.auth.getSession();
-    const isAuthenticated = !!authData?.session;
+    // 1. Sync Users
+    const { data: remoteUsers, error: usersErr } = await supabase.from('users').select('*');
+    if (!usersErr && remoteUsers && remoteUsers.length > 0) {
+      localStorage.setItem(USERS_KEY, JSON.stringify(remoteUsers));
+    }
 
-    // Only pull/push protected data if user is authenticated with Supabase
-    if (isAuthenticated) {
-      // 1. Sync Users
-      const { data: remoteUsers, error: usersErr } = await supabase.from('users').select('*');
-      if (!usersErr && remoteUsers && remoteUsers.length > 0) {
-        localStorage.setItem(USERS_KEY, JSON.stringify(remoteUsers));
-      }
+    // 2. Sync Wallets
+    const { data: remoteWallets, error: walletsErr } = await supabase.from('wallets').select('*');
+    if (!walletsErr && remoteWallets && remoteWallets.length > 0) {
+      localStorage.setItem(WALLETS_KEY, JSON.stringify(remoteWallets));
+    }
 
-      // 2. Sync Wallets
-      const { data: remoteWallets, error: walletsErr } = await supabase.from('wallets').select('*');
-      if (!walletsErr && remoteWallets && remoteWallets.length > 0) {
-        localStorage.setItem(WALLETS_KEY, JSON.stringify(remoteWallets));
-      }
+    // 3. Sync Savings
+    const { data: remoteSavings, error: savingsErr } = await supabase.from('savings_plans').select('*');
+    if (!savingsErr && remoteSavings && remoteSavings.length > 0) {
+      localStorage.setItem(SAVINGS_KEY, JSON.stringify(remoteSavings));
+    }
 
-      // 3. Sync Savings
-      const { data: remoteSavings, error: savingsErr } = await supabase.from('savings_plans').select('*');
-      if (!savingsErr && remoteSavings && remoteSavings.length > 0) {
-        localStorage.setItem(SAVINGS_KEY, JSON.stringify(remoteSavings));
-      }
+    // 4. Sync Transactions
+    const { data: remoteTransactions, error: txErr } = await supabase.from('transactions').select('*');
+    if (!txErr && remoteTransactions && remoteTransactions.length > 0) {
+      localStorage.setItem(TRANSACTIONS_KEY, JSON.stringify(remoteTransactions));
+    }
 
-      // 4. Sync Transactions
-      const { data: remoteTransactions, error: txErr } = await supabase.from('transactions').select('*');
-      if (!txErr && remoteTransactions && remoteTransactions.length > 0) {
-        localStorage.setItem(TRANSACTIONS_KEY, JSON.stringify(remoteTransactions));
-      }
+    // 5. Sync Accounts
+    const { data: remoteAccounts, error: acctErr } = await supabase.from('linked_accounts').select('*');
+    if (!acctErr && remoteAccounts && remoteAccounts.length > 0) {
+      localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(remoteAccounts));
+    }
 
-      // 5. Sync Accounts
-      const { data: remoteAccounts, error: acctErr } = await supabase.from('linked_accounts').select('*');
-      if (!acctErr && remoteAccounts && remoteAccounts.length > 0) {
-        localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(remoteAccounts));
-      }
+    // 6. Sync Beneficiaries
+    const { data: remoteBeneficiaries, error: benErr } = await supabase.from('beneficiaries').select('*');
+    if (!benErr && remoteBeneficiaries && remoteBeneficiaries.length > 0) {
+      localStorage.setItem(BENEFICIARIES_KEY, JSON.stringify(remoteBeneficiaries));
+    }
 
-      // 6. Sync Beneficiaries
-      const { data: remoteBeneficiaries, error: benErr } = await supabase.from('beneficiaries').select('*');
-      if (!benErr && remoteBeneficiaries && remoteBeneficiaries.length > 0) {
-        localStorage.setItem(BENEFICIARIES_KEY, JSON.stringify(remoteBeneficiaries));
-      }
+    // 7. Sync Notifications
+    const { data: remoteNotifications, error: notifErr } = await supabase.from('notifications').select('*');
+    if (!notifErr && remoteNotifications && remoteNotifications.length > 0) {
+      localStorage.setItem(NOTIFICATIONS_KEY, JSON.stringify(remoteNotifications));
+    }
 
-      // 7. Sync Notifications
-      const { data: remoteNotifications, error: notifErr } = await supabase.from('notifications').select('*');
-      if (!notifErr && remoteNotifications && remoteNotifications.length > 0) {
-        localStorage.setItem(NOTIFICATIONS_KEY, JSON.stringify(remoteNotifications));
-      }
+    // 8. Sync Staff
+    const { data: remoteStaff, error: staffErr } = await supabase.from('staff_profiles').select('*');
+    if (!staffErr && remoteStaff && remoteStaff.length > 0) {
+      localStorage.setItem(STAFF_KEY, JSON.stringify(remoteStaff));
+    }
 
-      // 8. Sync Staff
-      const { data: remoteStaff, error: staffErr } = await supabase.from('staff_profiles').select('*');
-      if (!staffErr && remoteStaff && remoteStaff.length > 0) {
-        localStorage.setItem(STAFF_KEY, JSON.stringify(remoteStaff));
-      }
-
-      // 9. Sync Audits
-      const { data: remoteAudit, error: auditErr } = await supabase.from('audit_logs').select('*');
-      if (!auditErr && remoteAudit && remoteAudit.length > 0) {
-        localStorage.setItem(AUDIT_LOGS_KEY, JSON.stringify(remoteAudit));
-      }
+    // 9. Sync Audits
+    const { data: remoteAudit, error: auditErr } = await supabase.from('audit_logs').select('*');
+    if (!auditErr && remoteAudit && remoteAudit.length > 0) {
+      localStorage.setItem(AUDIT_LOGS_KEY, JSON.stringify(remoteAudit));
     }
 
     // CMS Settings (public config table)

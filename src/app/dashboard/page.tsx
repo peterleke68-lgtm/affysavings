@@ -51,14 +51,14 @@ import Link from 'next/link';
 
 export default function DashboardPage() {
   const router = useRouter();
-  const { currentUser, setCurrentUser, cms } = useApp();
+  const { currentUser, setCurrentUser, cms, isLoadingAuth } = useApp();
 
   // Redirect if not authenticated
   useEffect(() => {
-    if (!currentUser) {
+    if (!isLoadingAuth && !currentUser) {
       router.push('/auth/login');
     }
-  }, [currentUser, router]);
+  }, [currentUser, isLoadingAuth, router]);
 
   const [wallet, setWallet] = useState<any>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);

@@ -8,6 +8,7 @@ interface AppContextProps {
   setCurrentUser: (user: User | null) => void;
   currentStaff: StaffProfile | null;
   setCurrentStaff: (staff: StaffProfile | null) => void;
+  isLoadingAuth: boolean;
   theme: 'light' | 'dark';
   toggleTheme: () => void;
   cms: any;
@@ -25,20 +26,51 @@ export const useApp = () => {
 export default function Providers({ children }: { children: React.ReactNode }) {
   const [currentUser, setCurrentUserState] = useState<User | null>(null);
   const [currentStaff, setCurrentStaffState] = useState<StaffProfile | null>(null);
+  const [isLoadingAuth, setIsLoadingAuth] = useState<boolean>(true);
   const [theme, setTheme] = useState<'light' | 'dark'>('dark');
   const [cms, setCms] = useState<any>(null);
 
   // Initialize DB and load data
   useEffect(() => {
-    const initDB = async () => {
+    const initApp = async () => {
       initializeDB();
-      await pullFromSupabase();
-      setCurrentUserState(DB.getCurrentUser());
+
+      // 1. Authoritative server-side session check
+      try {
+        const res = await fetch('/api/auth/me');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.authenticated && data.user) {
+            setCurrentUserState(data.user);
+            DB.setCurrentUser(data.user);
+          } else {
+            // Unauthenticated on server
+            setCurrentUserState(null);
+            DB.setCurrentUser(null);
+          }
+        } else {
+          // If server error or offline, fallback to local cache
+          const cachedUser = DB.getCurrentUser();
+          setCurrentUserState(cachedUser);
+        }
+      } catch (err) {
+        console.warn('[Affy Auth] Server session check failed, using local cache:', err);
+        const cachedUser = DB.getCurrentUser();
+        setCurrentUserState(cachedUser);
+      } finally {
+        setIsLoadingAuth(false);
+      }
+
+      // 2. Staff & CMS state
       setCurrentStaffState(DB.getCurrentStaff());
       setCms(DB.getCMS());
+
+      // 3. Remote data sync
+      await pullFromSupabase();
     };
-    initDB();
-    
+
+    initApp();
+
     // Load theme setting
     const savedTheme = localStorage.getItem('affy_theme') as 'light' | 'dark' | null;
     if (savedTheme === 'light') {
@@ -75,6 +107,13 @@ export default function Providers({ children }: { children: React.ReactNode }) {
   const setCurrentUser = (user: User | null) => {
     DB.setCurrentUser(user);
     setCurrentUserState(user);
+
+    if (user === null) {
+      // Clear server session cookie on logout
+      fetch('/api/auth/logout', { method: 'POST' }).catch((err) => {
+        console.warn('[Affy Auth] Logout request failed:', err);
+      });
+    }
   };
 
   const setCurrentStaff = (staff: StaffProfile | null) => {
@@ -95,20 +134,27 @@ export default function Providers({ children }: { children: React.ReactNode }) {
   }, [cms]);
 
   if (!cms) {
-    return <div className="min-h-screen bg-[#0d0617] flex items-center justify-center text-purple-400 font-mono animate-pulse">Loading Affy Savings Platform...</div>;
+    return (
+      <div className="min-h-screen bg-[#0d0617] flex items-center justify-center text-purple-400 font-mono animate-pulse">
+        Loading Affy Savings Platform...
+      </div>
+    );
   }
 
   return (
-    <AppContext.Provider value={{
-      currentUser,
-      setCurrentUser,
-      currentStaff,
-      setCurrentStaff,
-      theme,
-      toggleTheme,
-      cms,
-      refreshCMS
-    }}>
+    <AppContext.Provider
+      value={{
+        currentUser,
+        setCurrentUser,
+        currentStaff,
+        setCurrentStaff,
+        isLoadingAuth,
+        theme,
+        toggleTheme,
+        cms,
+        refreshCMS,
+      }}
+    >
       {children}
     </AppContext.Provider>
   );

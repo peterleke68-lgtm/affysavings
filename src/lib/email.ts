@@ -4,6 +4,11 @@ import { Resend } from 'resend';
 // Resend Email Service — transactional email delivery only
 // -------------------------------------------------------------------
 
+/** Delay helper for retry backoff */
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function getResendClient(): { client: Resend; from: string } | null {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey || apiKey === 're_your_resend_api_key') {
@@ -13,24 +18,48 @@ function getResendClient(): { client: Resend; from: string } | null {
   return { client: new Resend(apiKey), from };
 }
 
+/** Determines whether a Resend error is transient and worth retrying. */
+function isTransientError(error: { name?: string; message?: string }): boolean {
+  const transientNames = ['application_error', 'rate_limit_exceeded'];
+  const transientMessages = [
+    'unable to fetch',
+    'request could not be resolved',
+    'network',
+    'timeout',
+    'econnreset',
+    'econnrefused',
+    'socket hang up',
+  ];
+
+  if (error.name && transientNames.includes(error.name.toLowerCase())) {
+    return true;
+  }
+  if (error.message) {
+    const lowerMsg = error.message.toLowerCase();
+    return transientMessages.some((t) => lowerMsg.includes(t));
+  }
+  return false;
+}
+
 /**
  * Send an OTP verification email via Resend.
- * Returns { success: true } or { success: false, error: string }.
+ * Includes a single automatic retry for transient/network errors.
+ * Returns { success: true, id } or { success: false, error }.
  */
 export async function sendOtpEmail(
   to: string,
   otp: string,
   type: 'signup' | 'login'
 ): Promise<{ success: boolean; error?: string; id?: string }> {
-  console.log('[DIAGNOSTIC] Step 4a: sendOtpEmail() entered.');
+  console.log('[Email] sendOtpEmail() entered.');
   const resend = getResendClient();
 
   if (!resend) {
-    console.warn('[DIAGNOSTIC] Step 4b: Resend API key NOT found or invalid. Bypassing Resend.');
+    console.warn('[Email] Resend API key not configured. Email service unavailable.');
     return { success: false, error: 'Email service not configured' };
   }
 
-  console.log('[DIAGNOSTIC] Step 4c: Resend client ready. Configured sender:', resend.from);
+  console.log('[Email] Resend client ready. Sender:', resend.from);
 
   const isSignup = type === 'signup';
   const subject = isSignup
@@ -96,28 +125,52 @@ export async function sendOtpEmail(
 </body>
 </html>`.trim();
 
-  try {
-    console.log('[DIAGNOSTIC] Step 4d: Executing resend.client.emails.send()');
-    const { data, error } = await resend.client.emails.send({
-      from: resend.from,
-      to: [to],
-      subject,
-      html: htmlBody,
-    });
+  const MAX_ATTEMPTS = 2;
+  const RETRY_DELAY_MS = 2000;
 
-    if (error) {
-      console.error('[DIAGNOSTIC] Step 4e: resend.emails.send() returned ERROR:', {
-        message: error.message,
-        name: error.name,
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      console.log(`[Email] Attempt ${attempt}/${MAX_ATTEMPTS}: calling resend.emails.send()`);
+      const { data, error } = await resend.client.emails.send({
+        from: resend.from,
+        to: [to],
+        subject,
+        html: htmlBody,
       });
-      return { success: false, error: error.message || 'Failed to send email' };
-    }
 
-    console.log('[DIAGNOSTIC] Step 4e: resend.emails.send() SUCCESS! Email ID:', data?.id);
-    return { success: true, id: data?.id };
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown email delivery error';
-    console.error('[DIAGNOSTIC] Step 4e: resend.emails.send() EXCEPTION:', message);
-    return { success: false, error: message };
+      if (error) {
+        console.error(`[Email] Attempt ${attempt} Resend API error:`, {
+          name: error.name,
+          message: error.message,
+        });
+
+        // Retry only on transient errors, and only if we have attempts left
+        if (attempt < MAX_ATTEMPTS && isTransientError(error)) {
+          console.log(`[Email] Transient error detected. Retrying in ${RETRY_DELAY_MS}ms...`);
+          await delay(RETRY_DELAY_MS);
+          continue;
+        }
+
+        return { success: false, error: error.message || 'Failed to send email' };
+      }
+
+      console.log(`[Email] Attempt ${attempt} SUCCESS. Email ID:`, data?.id);
+      return { success: true, id: data?.id };
+    } catch (err: unknown) {
+      const errMessage = err instanceof Error ? err.message : 'Unknown email delivery error';
+      console.error(`[Email] Attempt ${attempt} exception:`, errMessage);
+
+      // Retry only on transient exceptions, and only if we have attempts left
+      if (attempt < MAX_ATTEMPTS) {
+        console.log(`[Email] Retrying in ${RETRY_DELAY_MS}ms...`);
+        await delay(RETRY_DELAY_MS);
+        continue;
+      }
+
+      return { success: false, error: errMessage };
+    }
   }
+
+  // Should never reach here, but satisfy TypeScript
+  return { success: false, error: 'Email delivery failed after all retry attempts' };
 }

@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { DB, logSimulation, User } from '@/services/db';
+import { DB, User } from '@/services/db';
 import { ShieldCheck, ArrowLeft, RefreshCw, KeyRound } from 'lucide-react';
 import { useApp } from '@/components/Providers';
 import AffyLogo from '@/components/AffyLogo';
@@ -90,122 +90,61 @@ export default function VerifyPage() {
     }
 
     const normalizedEmail = email.toLowerCase().trim();
-    let isServerVerified = false;
+    let pendingUser: any = null;
+    const pendingUserStr = localStorage.getItem(`affy_pending_user_${normalizedEmail}`);
+    if (pendingUserStr) {
+      try {
+        pendingUser = JSON.parse(pendingUserStr)?.user;
+      } catch {
+        // Ignored
+      }
+    }
 
     // Verify OTP with self-managed backend API
     try {
       const res = await fetch('/api/auth/verify-otp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: normalizedEmail, otp: fullOtp, type }),
+        body: JSON.stringify({
+          email: normalizedEmail,
+          otp: fullOtp,
+          type,
+          name: pendingUser?.name,
+          phone: pendingUser?.phone,
+        }),
       });
 
       const data = await res.json();
-      if (res.ok && data.verified) {
-        isServerVerified = true;
+      if (res.ok && data.verified && data.user) {
+        // Server verification and session creation succeeded
+        const verifiedUser: User = data.user;
+        const users = DB.getUsers();
+        const filtered = users.filter(u => u.email.toLowerCase() !== normalizedEmail);
+        filtered.push(verifiedUser);
+        DB.saveUsers(filtered);
+        DB.getWalletForUser(verifiedUser.id);
+        DB.addAuditLog(verifiedUser.id, type === 'signup' ? 'User Email Verified (Signup)' : 'User Login Verified', { email: verifiedUser.email });
+
+        localStorage.removeItem(`affy_otp_${normalizedEmail}`);
+        localStorage.removeItem(`affy_pending_user_${normalizedEmail}`);
+        localStorage.removeItem(`affy_2fa_${normalizedEmail}`);
+
+        setSuccess(true);
+        setTimeout(() => {
+          setCurrentUser(verifiedUser);
+          router.push('/dashboard');
+        }, 1000);
+        return;
       } else if (!res.ok) {
-        // If the server rejected it explicitly, show error
         setError(data.error || 'Invalid verification code.');
         setLoading(false);
         return;
       }
     } catch (err) {
-      console.warn('[Affy Auth] verify-otp API network error, trying local simulation fallback:', err);
-    }
-
-    // Process successful verification or fallback verification
-    if (type === 'signup') {
-      const pendingUserStr = localStorage.getItem(`affy_pending_user_${normalizedEmail}`);
-      if (!pendingUserStr) {
-        setError('Verification session expired or invalid. Please sign up again.');
-        setLoading(false);
-        return;
-      }
-
-      let isValidOtp = isServerVerified;
-
-      // Local fallback verification check if server was unreachable
-      if (!isValidOtp) {
-        const otpDataStr = localStorage.getItem(`affy_otp_${normalizedEmail}`);
-        if (otpDataStr) {
-          const otpData = JSON.parse(otpDataStr);
-          if (fullOtp === otpData.otp && Date.now() <= otpData.expires) {
-            isValidOtp = true;
-          }
-        }
-        // Universal dev code fallback
-        if (!isValidOtp && fullOtp === '123456') {
-          isValidOtp = true;
-        }
-      }
-
-      if (!isValidOtp) {
-        setError('Invalid verification code. Please check your email or simulation drawer.');
-        setLoading(false);
-        return;
-      }
-
-      const pending = JSON.parse(pendingUserStr);
-      const users = DB.getUsers();
-      const userToSave: User = {
-        ...pending.user,
-        id: pending.user.id || `usr-${Math.random().toString(36).substring(2, 10)}`,
-        is_verified: true,
-      };
-
-      const filtered = users.filter(u => u.email.toLowerCase() !== normalizedEmail);
-      filtered.push(userToSave);
-      DB.saveUsers(filtered);
-      DB.getWalletForUser(userToSave.id);
-      DB.addAuditLog(userToSave.id, 'User Email Verified (Signup)', { email: userToSave.email });
-      localStorage.removeItem(`affy_otp_${normalizedEmail}`);
-      localStorage.removeItem(`affy_pending_user_${normalizedEmail}`);
-
-      setSuccess(true);
-      setTimeout(() => {
-        setCurrentUser(userToSave);
-        router.push('/dashboard');
-      }, 1200);
-
-    } else if (type === '2fa' || type === 'login') {
-      let isValidOtp = isServerVerified;
-
-      // Local fallback check
-      if (!isValidOtp) {
-        const otpDataStr = localStorage.getItem(`affy_2fa_${normalizedEmail}`) || localStorage.getItem(`affy_otp_${normalizedEmail}`);
-        if (otpDataStr) {
-          const otpData = JSON.parse(otpDataStr);
-          if (fullOtp === otpData.otp && Date.now() <= otpData.expires) {
-            isValidOtp = true;
-          }
-        }
-        if (!isValidOtp && fullOtp === '123456') {
-          isValidOtp = true;
-        }
-      }
-
-      if (!isValidOtp) {
-        setError('Invalid verification code. Please check your verification source.');
-        setLoading(false);
-        return;
-      }
-
-      const users = DB.getUsers();
-      const user = users.find(u => u.email.toLowerCase() === normalizedEmail);
-      if (!user) {
-        setError('User profile not found.');
-        setLoading(false);
-        return;
-      }
-
-      localStorage.removeItem(`affy_2fa_${normalizedEmail}`);
-      localStorage.removeItem(`affy_otp_${normalizedEmail}`);
-      setSuccess(true);
-      setTimeout(() => {
-        setCurrentUser(user);
-        DB.addAuditLog(user.id, 'Login 2FA Successful', { email: user.email });
-        router.push('/dashboard');
-      }, 1200);
+      console.warn('[Affy Auth] verify-otp API network error:', err);
+      setError('Unable to reach the server. Please check your connection and try again.');
+      setLoading(false);
+      return;
     }
   };
 
@@ -227,51 +166,15 @@ export default function VerifyPage() {
 
       if (res.ok) {
         setResendCountdown(60);
-        if (!data.emailDelivered && data.simulationOtp) {
-          // Dev / simulation fallback
-          const storageKey = type === 'signup' ? `affy_otp_${normalizedEmail}` : `affy_2fa_${normalizedEmail}`;
-          localStorage.setItem(storageKey, JSON.stringify({
-            otp: data.simulationOtp,
-            expires: Date.now() + 10 * 60000,
-          }));
-          logSimulation(
-            'Email',
-            'Resent OTP Code',
-            normalizedEmail,
-            `Your new AFFY SAVINGS code is ${data.simulationOtp}. Expires in 10 minutes.`
-          );
-          setError('A new verification code has been dispatched. Check the simulation terminal.');
-        } else {
-          setError('A new verification code has been sent to your email.');
-        }
+        setError('A new verification code has been sent to your email.');
         return;
       } else {
         setError(data.error || 'Failed to resend code. Please try again.');
         return;
       }
     } catch (err) {
-      console.warn('[Affy Auth] resend-otp API error, fallback to local generation:', err);
-      const newOtpCode = Math.floor(100000 + Math.random() * 900000).toString();
-      
-      if (type === 'signup') {
-        localStorage.setItem(`affy_otp_${normalizedEmail}`, JSON.stringify({ otp: newOtpCode, expires: Date.now() + 10 * 60000 }));
-        logSimulation(
-          'Email',
-          'Resent OTP Verification Code',
-          normalizedEmail,
-          `Your new AFFY SAVINGS verification code is ${newOtpCode}. Expires in 10 minutes.`
-        );
-        setError('A new verification code has been dispatched. Check the simulation terminal.');
-      } else {
-        localStorage.setItem(`affy_2fa_${normalizedEmail}`, JSON.stringify({ otp: newOtpCode, expires: Date.now() + 5 * 60000 }));
-        logSimulation(
-          'Email',
-          'Resent 2FA OTP',
-          normalizedEmail,
-          `Your new AFFY SAVINGS 2FA verification code is ${newOtpCode}. Expires in 5 minutes.`
-        );
-        setError('A new 2FA code has been dispatched. Check the simulation terminal.');
-      }
+      console.warn('[Affy Auth] resend-otp API request failed:', err);
+      setError('Unable to reach the server. Please check your connection and try again.');
       setResendCountdown(60);
       setLoading(false);
     }
