@@ -72,9 +72,6 @@ export default function LandingPage() {
             <a href="#features" className="hover:text-primary transition-colors">Savings Products</a>
             <a href="#preview" className="hover:text-primary transition-colors">Visual Goals</a>
             <a href="#faq" className="hover:text-primary transition-colors">FAQ</a>
-            <Link href="/staff" className="hover:text-primary transition-colors flex items-center gap-1.5 normal-case font-mono">
-              <Globe size={14} /> Staff Portal
-            </Link>
           </nav>
  
           <div className="flex items-center gap-4">

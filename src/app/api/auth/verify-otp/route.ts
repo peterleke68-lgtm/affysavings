@@ -1,17 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyOtp as verifyOtpStore } from '@/lib/otp-store';
-import { findOrCreateUser, createAuditLog } from '@/lib/supabase-server';
+import { verifyOtp as verifyOtpStore, OtpType } from '@/lib/otp-store';
+import {
+  getUserByEmailWithCredentials,
+  createVerifiedUser,
+  createAuditLog,
+  getUserByEmail,
+} from '@/lib/supabase-server';
 import { createSessionToken, buildSessionCookieHeader } from '@/lib/session';
+import { getPendingRegistration, clearPendingRegistration } from '../send-otp/route';
+import { sanitizeUser } from '@/lib/credentials';
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { email, otp, type, name, phone, deviceInfo } = body as {
+    const { email, otp, type, deviceInfo } = body as {
       email?: string;
       otp?: string;
-      type?: string;
-      name?: string;
-      phone?: string;
+      type?: OtpType;
       deviceInfo?: any;
     };
 
@@ -23,14 +28,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!otp || typeof otp !== 'string' || !/^\d{6}$/.test(otp)) {
+    if (!otp || typeof otp !== 'string' || !/^\d{6}$/.test(otp.trim())) {
       return NextResponse.json(
         { success: false, error: 'A valid 6-digit verification code is required.' },
         { status: 400 }
       );
     }
 
-    if (type !== 'signup' && type !== 'login' && type !== '2fa') {
+    const validTypes: OtpType[] = ['signup', 'login', 'reset_password', 'change_password', 'change_pin'];
+    if (!type || !validTypes.includes(type)) {
       return NextResponse.json(
         { success: false, error: 'Invalid verification type.' },
         { status: 400 }
@@ -40,7 +46,7 @@ export async function POST(request: NextRequest) {
     const normalizedEmail = email.toLowerCase().trim();
 
     // Verify OTP against server-side store
-    const result = await verifyOtpStore(normalizedEmail, otp, type === '2fa' ? 'login' : type);
+    const result = await verifyOtpStore(normalizedEmail, otp.trim(), type);
 
     if (!result.valid) {
       return NextResponse.json(
@@ -49,40 +55,65 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Persist or retrieve user from database
-    const user = await findOrCreateUser(normalizedEmail, {
-      name,
-      phone,
-      deviceInfo,
-    });
+    // Handle signup activation
+    if (type === 'signup') {
+      const pendingReg = getPendingRegistration(normalizedEmail);
+      if (!pendingReg) {
+        return NextResponse.json(
+          { success: false, error: 'Registration session expired. Please submit the signup form again.' },
+          { status: 400 }
+        );
+      }
 
-    // Record audit log
-    await createAuditLog(
-      user.id,
-      type === 'signup' ? 'User Registration Verified' : 'User Login Verified',
-      { email: normalizedEmail, type }
-    );
+      // Create or update verified user in database with password & PIN hashes
+      const user = await createVerifiedUser({
+        email: normalizedEmail,
+        name: pendingReg.name,
+        phone: pendingReg.phone,
+        passwordHash: pendingReg.passwordHash,
+        pinHash: pendingReg.pinHash,
+        deviceInfo,
+      });
 
-    // Create secure signed session token
-    const token = createSessionToken({
-      id: user.id,
-      email: user.email,
-      role: 'user',
-    });
+      clearPendingRegistration(normalizedEmail);
 
-    // Build Set-Cookie header
-    const cookieHeader = buildSessionCookieHeader(token);
+      // Record audit log
+      await createAuditLog(
+        user.id,
+        'User Registration Completed (OTP Verified)',
+        { email: normalizedEmail }
+      );
 
-    const response = NextResponse.json({
+      // Create secure signed session token
+      const token = createSessionToken({
+        id: user.id,
+        email: user.email,
+        role: 'user',
+      });
+
+      const safeUser = sanitizeUser(user);
+      const cookieHeader = buildSessionCookieHeader(token);
+
+      const response = NextResponse.json({
+        success: true,
+        verified: true,
+        user: safeUser,
+        message: 'Account verified and created successfully.',
+      });
+
+      response.headers.set('Set-Cookie', cookieHeader);
+      return response;
+    }
+
+    // Handle generic OTP verification (e.g., for password reset or settings)
+    const existingUser = await getUserByEmail(normalizedEmail);
+
+    return NextResponse.json({
       success: true,
       verified: true,
-      user,
-      message: 'Verification successful.',
+      user: existingUser,
+      message: 'Code verified successfully.',
     });
-
-    response.headers.set('Set-Cookie', cookieHeader);
-
-    return response;
   } catch (err: unknown) {
     console.error('[Affy API] verify-otp error:', err);
     return NextResponse.json(

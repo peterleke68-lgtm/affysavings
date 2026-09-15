@@ -195,9 +195,9 @@ export const DEFAULT_CMS = {
   footer: {
     copyright: "\u00a9 2026 Affy Savings Inc. All rights reserved.",
     links: [
-      { name: "About Us", href: "#" },
-      { name: "CMS Admin", href: "/admin" },
-      { name: "Staff Portal", href: "/staff" }
+      { name: "About Us", href: "#features" },
+      { name: "Privacy Policy", href: "#" },
+      { name: "Terms of Service", href: "#" }
     ]
   }
 };
@@ -612,8 +612,13 @@ export const initializeDB = () => {
     setStorage(STAFF_KEY, defaultStaff);
   }
 
-  // Seed CMS Settings (with migration for directDeposit config if missing)
+  // Seed CMS Settings (with migration for directDeposit config if missing & sanitize hidden links)
   const currentCms = getStorage<any>(CMS_KEY, DEFAULT_CMS);
+  if (currentCms.footer && Array.isArray(currentCms.footer.links)) {
+    currentCms.footer.links = currentCms.footer.links.filter(
+      (l: any) => l.href !== '/admin' && l.href !== '/staff'
+    );
+  }
   if (!currentCms.directDeposit) {
     const mergedCms = { ...DEFAULT_CMS, ...currentCms, directDeposit: DEFAULT_CMS.directDeposit };
     setStorage(CMS_KEY, mergedCms);

@@ -1,9 +1,21 @@
 import crypto from 'crypto';
+import { NextRequest } from 'next/server';
+
+export type UserRole =
+  | 'user'
+  | 'Super Admin'
+  | 'Finance'
+  | 'Operations'
+  | 'Customer Support'
+  | 'Compliance'
+  | 'Content Manager'
+  | 'admin'
+  | 'staff';
 
 export interface SessionPayload {
   userId: string;
   email: string;
-  role: 'user' | 'staff' | 'admin';
+  role: UserRole;
   iat: number;
   exp: number;
 }
@@ -11,7 +23,6 @@ export interface SessionPayload {
 export const SESSION_COOKIE_NAME = 'affy_session';
 export const SESSION_MAX_AGE = 7 * 24 * 60 * 60; // 7 days in seconds
 
-// Use AFFY_SESSION_SECRET or a fallback derived from existing environment configuration
 const SESSION_SECRET =
   process.env.AFFY_SESSION_SECRET ||
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
@@ -36,7 +47,7 @@ function base64UrlDecode(str: string): string {
 /**
  * Creates a tamper-proof HMAC-SHA256 signed session token.
  */
-export function createSessionToken(user: { id: string; email: string; role?: 'user' | 'staff' | 'admin' }): string {
+export function createSessionToken(user: { id: string; email: string; role?: UserRole }): string {
   const now = Math.floor(Date.now() / 1000);
   const payload: SessionPayload = {
     userId: user.id,
@@ -158,4 +169,50 @@ export function extractSessionTokenFromCookie(cookieHeader: string | null | unde
     }
   }
   return null;
+}
+
+/**
+ * Extracts and verifies the session from an incoming Next.js request.
+ */
+export function getSessionFromRequest(request: NextRequest): SessionPayload | null {
+  const cookieHeader = request.headers.get('cookie');
+  const token = extractSessionTokenFromCookie(cookieHeader);
+  if (!token) return null;
+  return verifySessionToken(token);
+}
+
+/**
+ * Helper to enforce that a request has an authenticated session.
+ */
+export function requireAuthenticatedUser(request: NextRequest): { authenticated: true; session: SessionPayload } | { authenticated: false; error: string; status: number } {
+  const session = getSessionFromRequest(request);
+  if (!session) {
+    return { authenticated: false, error: 'Unauthorized. Please sign in to continue.', status: 401 };
+  }
+  return { authenticated: true, session };
+}
+
+/**
+ * Helper to enforce role-based access control.
+ */
+export function requireStaffRole(
+  request: NextRequest,
+  allowedRoles: UserRole[]
+): { authorized: true; session: SessionPayload } | { authorized: false; error: string; status: number } {
+  const authCheck = requireAuthenticatedUser(request);
+  if (!authCheck.authenticated) {
+    return { authorized: false, error: authCheck.error, status: authCheck.status };
+  }
+
+  const { session } = authCheck;
+  // Super Admin always has full access
+  if (session.role === 'Super Admin' || allowedRoles.includes(session.role)) {
+    return { authorized: true, session };
+  }
+
+  return {
+    authorized: false,
+    error: `Forbidden. This operation requires one of the following roles: ${allowedRoles.join(', ')}.`,
+    status: 403,
+  };
 }

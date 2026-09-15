@@ -1,6 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { initializeDB, DB, User, StaffProfile, pullFromSupabase } from '@/services/db';
 
 interface AppContextProps {
@@ -24,6 +25,7 @@ export const useApp = () => {
 };
 
 export default function Providers({ children }: { children: React.ReactNode }) {
+  const router = useRouter();
   const [currentUser, setCurrentUserState] = useState<User | null>(null);
   const [currentStaff, setCurrentStaffState] = useState<StaffProfile | null>(null);
   const [isLoadingAuth, setIsLoadingAuth] = useState<boolean>(true);
@@ -90,6 +92,31 @@ export default function Providers({ children }: { children: React.ReactNode }) {
       window.removeEventListener('cms_updated', handleCmsUpdated);
     };
   }, []);
+
+  // Global Discreet Admin Shortcut: Ctrl + Shift + A
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'a' || e.key === 'A')) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        if (currentStaff) {
+          if (currentStaff.role === 'Super Admin') {
+            router.push('/admin');
+          } else {
+            router.push('/staff');
+          }
+        } else {
+          router.push('/auth/login');
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true);
+    };
+  }, [currentStaff, router]);
 
   // Update theme helper
   const toggleTheme = () => {

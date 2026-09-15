@@ -3,13 +3,16 @@ import { createClient } from '@supabase/supabase-js';
 
 // -------------------------------------------------------------------
 // Persistent Serverless OTP Storage (Supabase PostgreSQL Backed)
+// Supports: signup, login, reset_password, change_password, change_pin
 // -------------------------------------------------------------------
+
+export type OtpType = 'signup' | 'login' | 'reset_password' | 'change_password' | 'change_pin';
 
 export interface OtpRecord {
   id?: string;
   otpHash: string;
   email: string;
-  type: 'signup' | 'login';
+  type: OtpType;
   expiresAt: number;
   attempts: number;
   used: boolean;
@@ -83,11 +86,11 @@ export async function recordRateLimitHit(_email: string): Promise<void> {
   // Implicitly recorded via row insertion in auth_otps
 }
 
-/** Store a new OTP record (invalidates any existing active OTP for this email) */
+/** Store a new OTP record (invalidates any existing active OTP for this email and type) */
 export async function storeOtp(
   email: string,
   otp: string,
-  type: 'signup' | 'login'
+  type: OtpType
 ): Promise<void> {
   const normalizedEmail = email.toLowerCase().trim();
   const hashed = hashOtp(otp);
@@ -97,11 +100,12 @@ export async function storeOtp(
 
   if (supabase) {
     try {
-      // 1. Invalidate previous unused OTPs for this email
+      // 1. Invalidate previous unused OTPs for this email and type
       await supabase
         .from('auth_otps')
         .update({ used: true })
         .eq('email', normalizedEmail)
+        .eq('type', type)
         .eq('used', false);
 
       // 2. Insert fresh hashed OTP record
@@ -125,7 +129,7 @@ export async function storeOtp(
   }
 
   // Fallback to in-memory store if DB is unconfigured
-  inMemoryFallbackStore.set(normalizedEmail, {
+  inMemoryFallbackStore.set(`${normalizedEmail}:${type}`, {
     otpHash: hashed,
     email: normalizedEmail,
     type,
@@ -136,21 +140,25 @@ export async function storeOtp(
   });
 }
 
-/** Retrieve active OTP record for an email */
-export async function getOtpRecord(email: string): Promise<OtpRecord | null> {
+/** Retrieve active OTP record for an email and type */
+export async function getOtpRecord(email: string, type?: OtpType): Promise<OtpRecord | null> {
   const normalizedEmail = email.toLowerCase().trim();
   const supabase = getSupabaseClient();
 
   if (supabase) {
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from('auth_otps')
         .select('*')
         .eq('email', normalizedEmail)
         .eq('used', false)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
+        .order('created_at', { ascending: false });
+
+      if (type) {
+        query = query.eq('type', type);
+      }
+
+      const { data, error } = await query.limit(1).maybeSingle();
 
       if (!error && data) {
         const expiresAtMs = new Date(data.expires_at).getTime();
@@ -164,7 +172,7 @@ export async function getOtpRecord(email: string): Promise<OtpRecord | null> {
           id: data.id,
           otpHash: data.otp_hash,
           email: data.email,
-          type: data.type,
+          type: data.type as OtpType,
           expiresAt: expiresAtMs,
           attempts: data.attempts,
           used: data.used,
@@ -177,9 +185,11 @@ export async function getOtpRecord(email: string): Promise<OtpRecord | null> {
   }
 
   // Fallback to in-memory
-  const record = inMemoryFallbackStore.get(normalizedEmail);
+  const key = type ? `${normalizedEmail}:${type}` : Array.from(inMemoryFallbackStore.keys()).find(k => k.startsWith(normalizedEmail));
+  if (!key) return null;
+  const record = inMemoryFallbackStore.get(key);
   if (!record || record.used || Date.now() > record.expiresAt) {
-    if (record) inMemoryFallbackStore.delete(normalizedEmail);
+    if (record) inMemoryFallbackStore.delete(key);
     return null;
   }
   return record;
@@ -192,10 +202,10 @@ export async function getOtpRecord(email: string): Promise<OtpRecord | null> {
 export async function verifyOtp(
   email: string,
   otp: string,
-  type: 'signup' | 'login'
+  type: OtpType
 ): Promise<{ valid: boolean; reason?: string }> {
   const normalizedEmail = email.toLowerCase().trim();
-  const record = await getOtpRecord(normalizedEmail);
+  const record = await getOtpRecord(normalizedEmail, type);
 
   if (!record) {
     return { valid: false, reason: 'No active verification code found. Please request a new one.' };
@@ -211,7 +221,7 @@ export async function verifyOtp(
     if (supabase && record.id) {
       await supabase.from('auth_otps').update({ used: true }).eq('id', record.id);
     } else {
-      inMemoryFallbackStore.delete(normalizedEmail);
+      inMemoryFallbackStore.delete(`${normalizedEmail}:${type}`);
     }
     return { valid: false, reason: 'Too many failed attempts. Please request a new verification code.' };
   }
@@ -245,46 +255,40 @@ export async function verifyOtp(
     await supabase.from('auth_otps').update({ used: true }).eq('id', record.id);
   } else {
     record.used = true;
-    inMemoryFallbackStore.delete(normalizedEmail);
+    inMemoryFallbackStore.delete(`${normalizedEmail}:${type}`);
   }
 
   return { valid: true };
 }
 
-/** Invalidate (delete/consume) any existing OTP for an email */
-export async function invalidateOtp(email: string): Promise<void> {
+/** Invalidate (delete/consume) any existing OTP for an email and optional type */
+export async function invalidateOtp(email: string, type?: OtpType): Promise<void> {
   const normalizedEmail = email.toLowerCase().trim();
   const supabase = getSupabaseClient();
 
   if (supabase) {
     try {
-      await supabase
+      let query = supabase
         .from('auth_otps')
         .update({ used: true })
         .eq('email', normalizedEmail)
         .eq('used', false);
+
+      if (type) {
+        query = query.eq('type', type);
+      }
+
+      await query;
     } catch (err) {
       console.warn('[otp-store] Database error during invalidateOtp:', err);
     }
   }
 
-  inMemoryFallbackStore.delete(normalizedEmail);
-}
-
-/** Clear all expired OTP records (maintenance utility) */
-export async function clearExpired(): Promise<void> {
-  const supabase = getSupabaseClient();
-  if (supabase) {
-    try {
-      const now = new Date().toISOString();
-      await supabase
-        .from('auth_otps')
-        .update({ used: true })
-        .lt('expires_at', now)
-        .eq('used', false);
-    } catch (err) {
-      console.warn('[otp-store] Database error during clearExpired:', err);
+  if (type) {
+    inMemoryFallbackStore.delete(`${normalizedEmail}:${type}`);
+  } else {
+    for (const key of inMemoryFallbackStore.keys()) {
+      if (key.startsWith(normalizedEmail)) inMemoryFallbackStore.delete(key);
     }
   }
 }
-

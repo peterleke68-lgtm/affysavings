@@ -173,8 +173,14 @@ export default function SettingsPage() {
     }
   };
 
-  // 3. UPDATE PASSWORD
-  const handlePasswordSubmit = (e: React.FormEvent) => {
+  const [passwordOtpStep, setPasswordOtpStep] = useState<'form' | 'otp'>('form');
+  const [passwordOtp, setPasswordOtp] = useState('');
+  const [pinOtpStep, setPinOtpStep] = useState<'form' | 'otp'>('form');
+  const [pinOtp, setPinOtp] = useState('');
+  const [actionLoading, setActionLoading] = useState(false);
+
+  // 3. UPDATE PASSWORD VIA SERVER API (OTP PROTECTED)
+  const handlePasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setPasswordError('');
     setPasswordSuccess(false);
@@ -184,57 +190,93 @@ export default function SettingsPage() {
       return;
     }
 
+    if (passwordData.newPassword.length < 8) {
+      setPasswordError('New password must be at least 8 characters.');
+      return;
+    }
+
     if (passwordData.newPassword !== passwordData.confirmPassword) {
-      setPasswordError('New password and password confirmation do not match.');
+      setPasswordError('New password and confirmation do not match.');
       return;
     }
 
-    if (passwordData.newPassword.length < 6) {
-      setPasswordError('Password must be at least 6 characters.');
-      return;
-    }
+    setActionLoading(true);
 
-    // Check current password
-    let savedPassword = 'password123';
-    const regData = localStorage.getItem(`affy_pending_user_${currentUser.email}`);
-    if (regData) {
-      try {
-        savedPassword = JSON.parse(regData).password;
-      } catch {}
-    }
-    const customPassword = localStorage.getItem(`affy_pwd_${currentUser.email}`);
-    if (customPassword) {
-      savedPassword = customPassword;
-    }
+    try {
+      const res = await fetch('/api/auth/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'request_otp',
+          currentPassword: passwordData.currentPassword,
+          newPassword: passwordData.newPassword,
+          confirmPassword: passwordData.confirmPassword,
+        }),
+      });
 
-    if (passwordData.currentPassword !== savedPassword) {
-      setPasswordError('The current password provided is incorrect.');
-      return;
+      const data = await res.json();
+      setActionLoading(false);
+
+      if (!res.ok) {
+        setPasswordError(data.error || 'Failed to authorize password change.');
+        return;
+      }
+
+      setPasswordOtpStep('otp');
+    } catch (err) {
+      console.error('[Change Password] Error:', err);
+      setPasswordError('Unable to reach server. Please try again.');
+      setActionLoading(false);
     }
-
-    // Save new password
-    localStorage.setItem(`affy_pwd_${currentUser.email}`, passwordData.newPassword);
-    setPasswordSuccess(true);
-    setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
-
-    DB.addAuditLog(currentUser.id, 'Updated Security Password', {});
-    logSimulation(
-      'Email',
-      'Password Changed Notification',
-      currentUser.email,
-      `Hi ${currentUser.name},\n\nYour security password was successfully changed. If you did not authorize this edit, contact support immediately.`
-    );
-    setTimeout(() => setActiveModal(null), 1200);
   };
 
-  // 4. TRANSACTION PIN SUBMIT
-  const handlePINSubmit = (e: React.FormEvent) => {
+  const handlePasswordOtpConfirm = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPasswordError('');
+    setActionLoading(true);
+
+    try {
+      const res = await fetch('/api/auth/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'confirm_change',
+          newPassword: passwordData.newPassword,
+          confirmPassword: passwordData.confirmPassword,
+          otp: passwordOtp.trim(),
+        }),
+      });
+
+      const data = await res.json();
+      setActionLoading(false);
+
+      if (!res.ok) {
+        setPasswordError(data.error || 'Failed to verify OTP code.');
+        return;
+      }
+
+      setPasswordSuccess(true);
+      setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
+      setPasswordOtp('');
+      setTimeout(() => {
+        setPasswordOtpStep('form');
+        setActiveModal(null);
+      }, 1500);
+    } catch (err) {
+      console.error('[Change Password OTP] Error:', err);
+      setPasswordError('Failed to confirm password change.');
+      setActionLoading(false);
+    }
+  };
+
+  // 4. TRANSACTION PIN SUBMIT VIA SERVER API (OTP PROTECTED)
+  const handlePINSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setPinError('');
     setPinSuccess(false);
 
-    if (transactionPINData.newPIN.length !== 4 || isNaN(Number(transactionPINData.newPIN))) {
-      setPinError('PIN must be exactly 4 digits.');
+    if (!/^\d{4}$/.test(transactionPINData.newPIN)) {
+      setPinError('PIN must be exactly 4 numeric digits.');
       return;
     }
 
@@ -243,11 +285,74 @@ export default function SettingsPage() {
       return;
     }
 
-    localStorage.setItem(`affy_pin_${currentUser.email}`, transactionPINData.newPIN);
-    setPinSuccess(true);
-    setTransactionPINData({ currentPIN: '', newPIN: '', confirmPIN: '' });
-    DB.addAuditLog(currentUser.id, 'Updated Transaction PIN', {});
-    setTimeout(() => setActiveModal(null), 1200);
+    setActionLoading(true);
+
+    try {
+      const res = await fetch('/api/auth/change-pin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'request_otp',
+          currentVerification: transactionPINData.currentPIN,
+          verificationMethod: 'pin',
+          newPin: transactionPINData.newPIN,
+          confirmPin: transactionPINData.confirmPIN,
+        }),
+      });
+
+      const data = await res.json();
+      setActionLoading(false);
+
+      if (!res.ok) {
+        setPinError(data.error || 'Failed to authorize PIN change.');
+        return;
+      }
+
+      setPinOtpStep('otp');
+    } catch (err) {
+      console.error('[Change PIN] Error:', err);
+      setPinError('Unable to reach server. Please try again.');
+      setActionLoading(false);
+    }
+  };
+
+  const handlePinOtpConfirm = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPinError('');
+    setActionLoading(true);
+
+    try {
+      const res = await fetch('/api/auth/change-pin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'confirm_change',
+          newPin: transactionPINData.newPIN,
+          confirmPin: transactionPINData.confirmPIN,
+          otp: pinOtp.trim(),
+        }),
+      });
+
+      const data = await res.json();
+      setActionLoading(false);
+
+      if (!res.ok) {
+        setPinError(data.error || 'Failed to verify OTP code.');
+        return;
+      }
+
+      setPinSuccess(true);
+      setTransactionPINData({ currentPIN: '', newPIN: '', confirmPIN: '' });
+      setPinOtp('');
+      setTimeout(() => {
+        setPinOtpStep('form');
+        setActiveModal(null);
+      }, 1500);
+    } catch (err) {
+      console.error('[Change PIN OTP] Error:', err);
+      setPinError('Failed to confirm PIN change.');
+      setActionLoading(false);
+    }
   };
 
   // 5. LINK NEW BANK ACCOUNT
@@ -1193,63 +1298,107 @@ export default function SettingsPage() {
                   <p className="text-[10px] text-zinc-400 mt-0.5">Authorizes locks breakout & withdrawals.</p>
                 </div>
 
-                <form onSubmit={handlePINSubmit} className="space-y-4">
-                  {pinError && (
-                    <div className="bg-red-500/5 border border-red-500/15 text-red-500 p-3 rounded-xl">{pinError}</div>
-                  )}
-                  {pinSuccess && (
-                    <div className="bg-emerald-500/5 border border-emerald-500/15 text-emerald-500 p-3 rounded-xl flex items-center gap-2 font-bold animate-fade-in">
-                      <CheckCircle2 size={15} />
-                      <span>Security PIN updated successfully.</span>
+                {pinOtpStep === 'form' ? (
+                  <form onSubmit={handlePINSubmit} className="space-y-4">
+                    {pinError && (
+                      <div className="bg-red-500/10 border border-red-500/20 text-red-500 text-xs p-3 rounded-xl">{pinError}</div>
+                    )}
+                    {pinSuccess && (
+                      <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-xs p-3 rounded-xl flex items-center gap-2 font-bold animate-fade-in">
+                        <CheckCircle2 size={15} />
+                        <span>Security PIN updated successfully.</span>
+                      </div>
+                    )}
+
+                    <div className="space-y-1.5">
+                      <label className="block text-[9px] font-bold text-zinc-400 uppercase tracking-widest">Current 4-Digit PIN (or Account Password)</label>
+                      <input 
+                        type="password" 
+                        maxLength={32}
+                        placeholder="Current PIN or Password"
+                        value={transactionPINData.currentPIN}
+                        onChange={(e) => setTransactionPINData({ ...transactionPINData, currentPIN: e.target.value })}
+                        className="w-full text-center text-sm px-4 py-2.5 rounded-xl bg-input-bg border border-border/60 focus:border-primary focus:outline-none"
+                        required 
+                      />
                     </div>
-                  )}
 
-                  <div className="space-y-1.5">
-                    <label className="block text-[9px] font-bold text-zinc-400 uppercase tracking-widest">Current 4-Digit PIN</label>
-                    <input 
-                      type="password" 
-                      maxLength={4}
-                      placeholder="••••"
-                      value={transactionPINData.currentPIN}
-                      onChange={(e) => setTransactionPINData({ ...transactionPINData, currentPIN: e.target.value })}
-                      className="w-full text-center tracking-widest text-lg px-4 py-2.5 rounded-xl bg-input-bg border border-border/60 focus:border-primary focus:outline-none"
-                      required 
-                    />
-                  </div>
+                    <div className="space-y-1.5">
+                      <label className="block text-[9px] font-bold text-zinc-400 uppercase tracking-widest">New 4-Digit PIN</label>
+                      <input 
+                        type="password" 
+                        maxLength={4}
+                        placeholder="••••"
+                        value={transactionPINData.newPIN}
+                        onChange={(e) => setTransactionPINData({ ...transactionPINData, newPIN: e.target.value })}
+                        className="w-full text-center tracking-widest text-lg px-4 py-2.5 rounded-xl bg-input-bg border border-border/60 focus:border-primary focus:outline-none"
+                        required 
+                      />
+                    </div>
 
-                  <div className="space-y-1.5">
-                    <label className="block text-[9px] font-bold text-zinc-400 uppercase tracking-widest">New 4-Digit PIN</label>
-                    <input 
-                      type="password" 
-                      maxLength={4}
-                      placeholder="••••"
-                      value={transactionPINData.newPIN}
-                      onChange={(e) => setTransactionPINData({ ...transactionPINData, newPIN: e.target.value })}
-                      className="w-full text-center tracking-widest text-lg px-4 py-2.5 rounded-xl bg-input-bg border border-border/60 focus:border-primary focus:outline-none"
-                      required 
-                    />
-                  </div>
+                    <div className="space-y-1.5">
+                      <label className="block text-[9px] font-bold text-zinc-400 uppercase tracking-widest">Confirm New PIN</label>
+                      <input 
+                        type="password" 
+                        maxLength={4}
+                        placeholder="••••"
+                        value={transactionPINData.confirmPIN}
+                        onChange={(e) => setTransactionPINData({ ...transactionPINData, confirmPIN: e.target.value })}
+                        className="w-full text-center tracking-widest text-lg px-4 py-2.5 rounded-xl bg-input-bg border border-border/60 focus:border-primary focus:outline-none"
+                        required 
+                      />
+                    </div>
 
-                  <div className="space-y-1.5">
-                    <label className="block text-[9px] font-bold text-zinc-400 uppercase tracking-widest">Confirm New PIN</label>
-                    <input 
-                      type="password" 
-                      maxLength={4}
-                      placeholder="••••"
-                      value={transactionPINData.confirmPIN}
-                      onChange={(e) => setTransactionPINData({ ...transactionPINData, confirmPIN: e.target.value })}
-                      className="w-full text-center tracking-widest text-lg px-4 py-2.5 rounded-xl bg-input-bg border border-border/60 focus:border-primary focus:outline-none"
-                      required 
-                    />
-                  </div>
+                    <button 
+                      type="submit"
+                      disabled={actionLoading}
+                      className="w-full bg-primary hover:opacity-95 text-white font-bold py-3.5 rounded-xl transition-all cursor-pointer shadow-md disabled:opacity-50"
+                    >
+                      {actionLoading ? 'Sending Verification Code...' : 'Request PIN Change'}
+                    </button>
+                  </form>
+                ) : (
+                  <form onSubmit={handlePinOtpConfirm} className="space-y-4">
+                    {pinError && (
+                      <div className="bg-red-500/10 border border-red-500/20 text-red-500 text-xs p-3 rounded-xl">{pinError}</div>
+                    )}
+                    <div className="bg-primary/5 border border-primary/20 p-3 rounded-xl text-left">
+                      <p className="text-xs text-foreground font-medium">
+                        We sent a 6-digit confirmation OTP to your registered email address.
+                      </p>
+                    </div>
 
-                  <button 
-                    type="submit"
-                    className="w-full bg-primary hover:opacity-95 text-white font-bold py-3.5 rounded-xl transition-all cursor-pointer shadow-md"
-                  >
-                    Save Security PIN
-                  </button>
-                </form>
+                    <div className="space-y-1.5">
+                      <label className="block text-[9px] font-bold text-zinc-400 uppercase tracking-widest">6-Digit Security OTP</label>
+                      <input 
+                        type="text" 
+                        maxLength={6}
+                        placeholder="123456"
+                        value={pinOtp}
+                        onChange={(e) => setPinOtp(e.target.value)}
+                        className="w-full text-center tracking-[0.3em] font-mono text-xl px-4 py-3 rounded-xl bg-input-bg border border-border/60 focus:border-primary focus:outline-none"
+                        required 
+                      />
+                    </div>
+
+                    <div className="flex gap-2">
+                      <button 
+                        type="button"
+                        onClick={() => { setPinOtpStep('form'); setPinError(''); }}
+                        className="w-1/3 border border-border/60 text-zinc-400 hover:text-foreground font-bold py-3 rounded-xl transition-all"
+                      >
+                        Back
+                      </button>
+                      <button 
+                        type="submit"
+                        disabled={actionLoading}
+                        className="flex-1 bg-primary hover:opacity-95 text-white font-bold py-3 rounded-xl transition-all cursor-pointer shadow-md disabled:opacity-50"
+                      >
+                        {actionLoading ? 'Confirming...' : 'Confirm PIN Change'}
+                      </button>
+                    </div>
+                  </form>
+                )}
               </div>
             )}
 
@@ -1261,57 +1410,101 @@ export default function SettingsPage() {
                   <p className="text-[10px] text-zinc-400 mt-0.5">Secure your authentication login settings.</p>
                 </div>
 
-                <form onSubmit={handlePasswordSubmit} className="space-y-4">
-                  {passwordError && (
-                    <div className="bg-red-500/5 border border-red-500/15 text-red-500 p-3 rounded-xl">{passwordError}</div>
-                  )}
-                  {passwordSuccess && (
-                    <div className="bg-emerald-500/5 border border-emerald-500/15 text-emerald-500 p-3 rounded-xl flex items-center gap-2 font-bold animate-fade-in">
-                      <CheckCircle2 size={15} />
-                      <span>Security password changed successfully.</span>
+                {passwordOtpStep === 'form' ? (
+                  <form onSubmit={handlePasswordSubmit} className="space-y-4">
+                    {passwordError && (
+                      <div className="bg-red-500/10 border border-red-500/20 text-red-500 text-xs p-3 rounded-xl">{passwordError}</div>
+                    )}
+                    {passwordSuccess && (
+                      <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-xs p-3 rounded-xl flex items-center gap-2 font-bold animate-fade-in">
+                        <CheckCircle2 size={15} />
+                        <span>Security password changed successfully.</span>
+                      </div>
+                    )}
+
+                    <div className="space-y-1.5">
+                      <label className="block text-[9px] font-bold text-zinc-400 uppercase">Current Password</label>
+                      <input 
+                        type="password" 
+                        value={passwordData.currentPassword}
+                        onChange={(e) => setPasswordData({ ...passwordData, currentPassword: e.target.value })}
+                        className={inputClasses}
+                        required 
+                      />
                     </div>
-                  )}
 
-                  <div className="space-y-1.5">
-                    <label className="block text-[9px] font-bold text-zinc-400 uppercase">Current Password</label>
-                    <input 
-                      type="password" 
-                      value={passwordData.currentPassword}
-                      onChange={(e) => setPasswordData({ ...passwordData, currentPassword: e.target.value })}
-                      className={inputClasses}
-                      required 
-                    />
-                  </div>
+                    <div className="space-y-1.5">
+                      <label className="block text-[9px] font-bold text-zinc-400 uppercase">New Password</label>
+                      <input 
+                        type="password" 
+                        value={passwordData.newPassword}
+                        onChange={(e) => setPasswordData({ ...passwordData, newPassword: e.target.value })}
+                        className={inputClasses}
+                        required 
+                      />
+                    </div>
 
-                  <div className="space-y-1.5">
-                    <label className="block text-[9px] font-bold text-zinc-400 uppercase">New Password</label>
-                    <input 
-                      type="password" 
-                      value={passwordData.newPassword}
-                      onChange={(e) => setPasswordData({ ...passwordData, newPassword: e.target.value })}
-                      className={inputClasses}
-                      required 
-                    />
-                  </div>
+                    <div className="space-y-1.5">
+                      <label className="block text-[9px] font-bold text-zinc-400 uppercase">Confirm New Password</label>
+                      <input 
+                        type="password" 
+                        value={passwordData.confirmPassword}
+                        onChange={(e) => setPasswordData({ ...passwordData, confirmPassword: e.target.value })}
+                        className={inputClasses}
+                        required 
+                      />
+                    </div>
 
-                  <div className="space-y-1.5">
-                    <label className="block text-[9px] font-bold text-zinc-400 uppercase">Confirm New Password</label>
-                    <input 
-                      type="password" 
-                      value={passwordData.confirmPassword}
-                      onChange={(e) => setPasswordData({ ...passwordData, confirmPassword: e.target.value })}
-                      className={inputClasses}
-                      required 
-                    />
-                  </div>
+                    <button 
+                      type="submit"
+                      disabled={actionLoading}
+                      className="w-full bg-primary hover:opacity-95 text-white font-bold py-3.5 rounded-xl transition-all cursor-pointer shadow-md disabled:opacity-50"
+                    >
+                      {actionLoading ? 'Sending Verification Code...' : 'Request Password Change'}
+                    </button>
+                  </form>
+                ) : (
+                  <form onSubmit={handlePasswordOtpConfirm} className="space-y-4">
+                    {passwordError && (
+                      <div className="bg-red-500/10 border border-red-500/20 text-red-500 text-xs p-3 rounded-xl">{passwordError}</div>
+                    )}
+                    <div className="bg-primary/5 border border-primary/20 p-3 rounded-xl text-left">
+                      <p className="text-xs text-foreground font-medium">
+                        We sent a 6-digit confirmation OTP to your registered email address.
+                      </p>
+                    </div>
 
-                  <button 
-                    type="submit"
-                    className="w-full bg-primary hover:opacity-95 text-white font-bold py-3.5 rounded-xl transition-all cursor-pointer shadow-md"
-                  >
-                    Change Authentication Password
-                  </button>
-                </form>
+                    <div className="space-y-1.5">
+                      <label className="block text-[9px] font-bold text-zinc-400 uppercase tracking-widest">6-Digit Security OTP</label>
+                      <input 
+                        type="text" 
+                        maxLength={6}
+                        placeholder="123456"
+                        value={passwordOtp}
+                        onChange={(e) => setPasswordOtp(e.target.value)}
+                        className="w-full text-center tracking-[0.3em] font-mono text-xl px-4 py-3 rounded-xl bg-input-bg border border-border/60 focus:border-primary focus:outline-none"
+                        required 
+                      />
+                    </div>
+
+                    <div className="flex gap-2">
+                      <button 
+                        type="button"
+                        onClick={() => { setPasswordOtpStep('form'); setPasswordError(''); }}
+                        className="w-1/3 border border-border/60 text-zinc-400 hover:text-foreground font-bold py-3 rounded-xl transition-all"
+                      >
+                        Back
+                      </button>
+                      <button 
+                        type="submit"
+                        disabled={actionLoading}
+                        className="flex-1 bg-primary hover:opacity-95 text-white font-bold py-3 rounded-xl transition-all cursor-pointer shadow-md disabled:opacity-50"
+                      >
+                        {actionLoading ? 'Verifying...' : 'Update Password'}
+                      </button>
+                    </div>
+                  </form>
+                )}
               </div>
             )}
 

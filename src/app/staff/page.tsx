@@ -26,7 +26,8 @@ import {
   HelpCircle,
   Briefcase,
   ShoppingBag,
-  Truck
+  Truck,
+  Key
 } from 'lucide-react';
 import Link from 'next/link';
 import AffyLogo from '@/components/AffyLogo';
@@ -42,33 +43,137 @@ export default function StaffPortal() {
   }, [currentStaff, router]);
 
   // Lists
-  const [staffList, setStaffList] = useState<StaffProfile[]>([]);
   const [customerList, setCustomerList] = useState<User[]>([]);
   const [savingsList, setSavingsList] = useState<SavingsPlan[]>([]);
   const [transactionList, setTransactionList] = useState<Transaction[]>([]);
   const [auditList, setAuditList] = useState<AuditLog[]>([]);
   const [foodOrders, setFoodOrders] = useState<FoodOrder[]>([]);
+  const [staffList, setStaffList] = useState<any[]>([]);
 
   // Action states
-  const [inviteModal, setInviteModal] = useState(false);
-  const [inviteData, setInviteData] = useState({
-    name: '',
-    email: '',
-    role: 'Operations' as StaffProfile['role'],
-  });
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+  const [selfPasswordModal, setSelfPasswordModal] = useState(false);
+  const [selfPasswordData, setSelfPasswordData] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
+
+  const [inviteModal, setInviteModal] = useState(false);
+  const [inviteData, setInviteData] = useState<{ name: string; email: string; role: StaffProfile['role'] }>({
+    name: '',
+    email: '',
+    role: 'Operations',
+  });
+
+  const handleInviteStaff = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg('');
+    try {
+      const res = await fetch('/api/staff/invite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(inviteData),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setErrorMsg(data.error || 'Failed to send invitation.');
+        return;
+      }
+      setSuccessMsg(data.message || 'Staff invitation sent successfully.');
+      setInviteModal(false);
+      setInviteData({ name: '', email: '', role: 'Operations' });
+      refreshData();
+      setTimeout(() => setSuccessMsg(''), 4000);
+    } catch {
+      setErrorMsg('Network error while inviting colleague.');
+    }
+  };
+
+  const handleToggleStaffStatus = async (staffId: string, newStatus: boolean) => {
+    setErrorMsg('');
+    try {
+      const res = await fetch(`/api/staff/${staffId}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_active: newStatus }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setErrorMsg(data.error || 'Failed to update staff status.');
+        return;
+      }
+      setSuccessMsg('Staff status updated successfully.');
+      fetchStaffList();
+      setTimeout(() => setSuccessMsg(''), 4000);
+    } catch {
+      setErrorMsg('Network error while updating staff status.');
+    }
+  };
+
+  const handleChangeSelfPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg('');
+    try {
+      const res = await fetch('/api/staff/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(selfPasswordData),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setErrorMsg(data.error || 'Failed to change password.');
+        return;
+      }
+      setSuccessMsg('Your password has been changed successfully.');
+      setSelfPasswordModal(false);
+      setSelfPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
+      setTimeout(() => setSuccessMsg(''), 4000);
+    } catch {
+      setErrorMsg('Network error while changing password.');
+    }
+  };
   
   // Search state
   const [searchQuery, setSearchQuery] = useState('');
 
+  // Finance Review Queue state (Server-authoritative)
+  const [pendingReviews, setPendingReviews] = useState<any[]>([]);
+  const [loadingReviews, setLoadingReviews] = useState(false);
+  const [reviewActionLoading, setReviewActionLoading] = useState<string | null>(null);
+
+  const fetchStaffList = async () => {
+    try {
+      const res = await fetch('/api/staff');
+      const data = await res.json();
+      if (data.success && data.staff) {
+        setStaffList(data.staff);
+      }
+    } catch (e) {
+      console.error('Failed to fetch staff list:', e);
+    }
+  };
+
+  const fetchPendingReviews = async () => {
+    setLoadingReviews(true);
+    try {
+      const res = await fetch('/api/finance/transactions?status=pending');
+      const data = await res.json();
+      if (data.success && data.transactions) {
+        setPendingReviews(data.transactions);
+      }
+    } catch (e) {
+      console.error('Failed to fetch pending transactions:', e);
+    } finally {
+      setLoadingReviews(false);
+    }
+  };
+
   const refreshData = () => {
-    setStaffList(DB.getStaff());
     setCustomerList(DB.getUsers());
     setSavingsList(DB.getSavingsPlans());
     setTransactionList(DB.getTransactions());
     setAuditList(DB.getAuditLogs());
     setFoodOrders(DB.getFoodOrders());
+    fetchPendingReviews();
+    fetchStaffList();
   };
 
   useEffect(() => {
@@ -83,62 +188,6 @@ export default function StaffPortal() {
       </div>
     );
   }
-
-  // 1. INVITE STAFF MEMBER
-  const handleInviteStaff = (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrorMsg('');
-    setSuccessMsg('');
-
-    if (!inviteData.name || !inviteData.email) {
-      setErrorMsg('Please fill in name and email fields.');
-      return;
-    }
-
-    if (staffList.some(s => s.email.toLowerCase() === inviteData.email.toLowerCase())) {
-      setErrorMsg('A staff member with this email already exists.');
-      return;
-    }
-
-    let perms: string[] = [];
-    switch (inviteData.role) {
-      case 'Super Admin': perms = ['all']; break;
-      case 'Operations': perms = ['manage_users', 'approve_accounts']; break;
-      case 'Customer Support': perms = ['view_users', 'view_transactions']; break;
-      case 'Compliance': perms = ['review_transactions', 'view_audit_logs', 'unlock_users']; break;
-      case 'Finance': perms = ['approve_transactions', 'view_metrics']; break;
-      case 'Content Manager': perms = ['manage_cms']; break;
-    }
-
-    const invited = DB.addStaff({
-      email: inviteData.email.toLowerCase(),
-      name: inviteData.name,
-      role: inviteData.role,
-      permissions: perms,
-      is_active: true
-    });
-
-    logSimulation(
-      'WhatsApp',
-      'Staff Portal Invitation Alert',
-      '+1 (555) 999-0000',
-      `Welcome to AFFY SAVINGS! You have been invited to join the staff team as a ${inviteData.role}. Setup password link: https://affysavings.com/staff/setup?email=${invited.email}`
-    );
-
-    DB.addAuditLog(currentStaff.id, 'Invited New Staff Member', { email: inviteData.email, role: inviteData.role });
-    
-    setInviteModal(false);
-    refreshData();
-    setSuccessMsg(`Invitation dispatched to ${inviteData.email} successfully.`);
-    setInviteData({ name: '', email: '', role: 'Operations' });
-    setTimeout(() => setSuccessMsg(''), 4500);
-  };
-
-  const handleToggleStaffStatus = (id: string, active: boolean) => {
-    DB.updateStaffStatus(id, active);
-    DB.addAuditLog(currentStaff.id, active ? 'Activated Staff Member' : 'Deactivated Staff Member', { staffId: id });
-    refreshData();
-  };
 
   // 2. COMPLIANCE: UNLOCK LOCKED CUSTOMER PROFILE
   const handleUnlockCustomer = (customerId: string) => {
@@ -166,6 +215,108 @@ export default function StaffPortal() {
       setSuccessMsg(`Released lock duration for savings plan: "${list[idx].name}".`);
       refreshData();
       setTimeout(() => setSuccessMsg(''), 3500);
+    }
+  };
+
+  const handleApproveDeposit = async (txId: string) => {
+    setReviewActionLoading(txId);
+    setErrorMsg('');
+    try {
+      const res = await fetch('/api/deposits/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transactionId: txId }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setSuccessMsg(data.message || 'Deposit approved and credited successfully.');
+        fetchPendingReviews();
+        refreshData();
+        setTimeout(() => setSuccessMsg(''), 4000);
+      } else {
+        setErrorMsg(data.error || 'Failed to approve deposit.');
+      }
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Error communicating with server.');
+    } finally {
+      setReviewActionLoading(null);
+    }
+  };
+
+  const handleRejectDeposit = async (txId: string) => {
+    const reason = window.prompt('Enter reason for rejecting deposit:') || 'Unverified or invalid deposit receipt.';
+    setReviewActionLoading(txId);
+    setErrorMsg('');
+    try {
+      const res = await fetch('/api/deposits/reject', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transactionId: txId, reason }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setSuccessMsg('Deposit rejected.');
+        fetchPendingReviews();
+        refreshData();
+        setTimeout(() => setSuccessMsg(''), 4000);
+      } else {
+        setErrorMsg(data.error || 'Failed to reject deposit.');
+      }
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Error communicating with server.');
+    } finally {
+      setReviewActionLoading(null);
+    }
+  };
+
+  const handleApproveWithdrawal = async (txId: string) => {
+    setReviewActionLoading(txId);
+    setErrorMsg('');
+    try {
+      const res = await fetch('/api/withdrawals/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transactionId: txId }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setSuccessMsg(data.message || 'Withdrawal approved and dispatched.');
+        fetchPendingReviews();
+        refreshData();
+        setTimeout(() => setSuccessMsg(''), 4000);
+      } else {
+        setErrorMsg(data.error || 'Failed to approve withdrawal.');
+      }
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Error communicating with server.');
+    } finally {
+      setReviewActionLoading(null);
+    }
+  };
+
+  const handleRejectWithdrawal = async (txId: string) => {
+    const reason = window.prompt('Enter reason for rejecting withdrawal:') || 'Unable to verify payout details.';
+    setReviewActionLoading(txId);
+    setErrorMsg('');
+    try {
+      const res = await fetch('/api/withdrawals/reject', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transactionId: txId, reason }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setSuccessMsg('Withdrawal rejected and escrow funds refunded to wallet.');
+        fetchPendingReviews();
+        refreshData();
+        setTimeout(() => setSuccessMsg(''), 4000);
+      } else {
+        setErrorMsg(data.error || 'Failed to reject withdrawal.');
+      }
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Error communicating with server.');
+    } finally {
+      setReviewActionLoading(null);
     }
   };
 
@@ -556,6 +707,127 @@ export default function StaffPortal() {
                         {transactionList.filter(t => t.type === 'penalty_fee').length === 0 && (
                           <tr>
                             <td colSpan={4} className="py-8 text-center text-zinc-400 font-semibold">No penalties accrued yet.</td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Finance Transaction Review Queue — Pending Deposits & Withdrawals */}
+                <div className="bg-card-bg border border-border/40 rounded-3xl p-6 md:p-8 shadow-sm space-y-4 text-xs hover-lift">
+                  <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 pb-3 border-b border-border/30">
+                    <div className="flex items-center gap-2">
+                      <ShieldCheck size={16} className="text-emerald-500 animate-pulse" />
+                      <div>
+                        <h3 className="font-bold text-sm font-display text-foreground">Pending Transaction Approvals</h3>
+                        <p className="text-[10px] text-zinc-400">Authoritative database review queue for deposits & withdrawals</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={fetchPendingReviews}
+                        disabled={loadingReviews}
+                        className="px-3 py-1.5 rounded-xl border border-border/50 bg-neutral-gray/50 hover:bg-neutral-gray text-zinc-400 hover:text-foreground text-[10px] font-bold flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
+                      >
+                        <RefreshCw size={12} className={loadingReviews ? 'animate-spin' : ''} />
+                        Refresh Queue
+                      </button>
+                      <span className="text-[9px] font-mono px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-500 border border-amber-500/20 font-bold">
+                        {pendingReviews.length} PENDING
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead>
+                        <tr className="border-b border-border/40 text-zinc-400 font-bold uppercase tracking-widest text-[9px]">
+                          <th className="py-3 px-4">Date / Ref</th>
+                          <th className="py-3 px-4">Type</th>
+                          <th className="py-3 px-4">Customer</th>
+                          <th className="py-3 px-4">Amount</th>
+                          <th className="py-3 px-4">Details</th>
+                          <th className="py-3 px-4 text-right">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border/30">
+                        {pendingReviews.map((tx: any) => (
+                          <tr key={tx.id} className="hover:bg-neutral-gray/30 transition-colors">
+                            <td className="py-3.5 px-4">
+                              <span className="font-mono font-bold text-foreground block">{tx.reference}</span>
+                              <span className="text-[10px] text-zinc-400 font-mono">
+                                {new Date(tx.created_at).toLocaleString()}
+                              </span>
+                            </td>
+                            <td className="py-3.5 px-4">
+                              <span
+                                className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded-full border ${
+                                  tx.type === 'deposit'
+                                    ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                                    : 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20'
+                                }`}
+                              >
+                                {tx.type}
+                              </span>
+                            </td>
+                            <td className="py-3.5 px-4">
+                              <span className="font-bold text-foreground block">
+                                {tx.users?.name || tx.user_id}
+                              </span>
+                              <span className="text-[10px] text-zinc-400 font-mono">
+                                {tx.users?.email || ''}
+                              </span>
+                            </td>
+                            <td className="py-3.5 px-4 font-mono font-extrabold text-foreground text-sm">
+                              ₦{Number(tx.amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                            </td>
+                            <td className="py-3.5 px-4 text-zinc-400 text-[11px] max-w-xs truncate">
+                              {tx.description || (tx.type === 'deposit' ? 'Direct deposit pending verification' : 'Withdrawal to linked account')}
+                            </td>
+                            <td className="py-3.5 px-4 text-right space-x-2">
+                              <button
+                                onClick={() =>
+                                  tx.type === 'deposit'
+                                    ? handleApproveDeposit(tx.id)
+                                    : handleApproveWithdrawal(tx.id)
+                                }
+                                disabled={reviewActionLoading === tx.id}
+                                className="px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-[10px] transition-all cursor-pointer disabled:opacity-50 inline-flex items-center gap-1 shadow-sm"
+                              >
+                                {reviewActionLoading === tx.id ? (
+                                  <RefreshCw size={10} className="animate-spin" />
+                                ) : (
+                                  <CheckCircle2 size={12} />
+                                )}
+                                Approve
+                              </button>
+                              <button
+                                onClick={() =>
+                                  tx.type === 'deposit'
+                                    ? handleRejectDeposit(tx.id)
+                                    : handleRejectWithdrawal(tx.id)
+                                }
+                                disabled={reviewActionLoading === tx.id}
+                                className="px-3 py-1.5 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 font-bold text-[10px] transition-all cursor-pointer disabled:opacity-50 inline-flex items-center gap-1"
+                              >
+                                Reject
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                        {pendingReviews.length === 0 && !loadingReviews && (
+                          <tr>
+                            <td colSpan={6} className="py-8 text-center text-zinc-400 font-semibold">
+                              ✓ All clear! No pending deposits or withdrawals in the review queue.
+                            </td>
+                          </tr>
+                        )}
+                        {loadingReviews && (
+                          <tr>
+                            <td colSpan={6} className="py-8 text-center text-zinc-400 font-mono">
+                              Loading review queue...
+                            </td>
                           </tr>
                         )}
                       </tbody>

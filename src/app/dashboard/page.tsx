@@ -133,6 +133,8 @@ export default function DashboardPage() {
   const [withdrawModal, setWithdrawModal] = useState(false);
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [withdrawSource, setWithdrawSource] = useState('');
+  const [withdrawPin, setWithdrawPin] = useState('');
+  const [withdrawError, setWithdrawError] = useState('');
 
   // eTranzact checkout state
   const [tranzactView, setTranzactView] = useState<'amount' | 'select' | 'card' | 'otp' | 'bank' | 'pocket' | 'success'>('amount');
@@ -163,6 +165,8 @@ export default function DashboardPage() {
   const closeWithdrawModal = () => {
     setWithdrawModal(false);
     setWithdrawAmount('');
+    setWithdrawPin('');
+    setWithdrawError('');
     if (linkedAccounts.length > 0) {
       setWithdrawSource(linkedAccounts.find(a => a.is_default)?.id || linkedAccounts[0].id);
     }
@@ -261,8 +265,8 @@ export default function DashboardPage() {
     refreshData();
   };
 
-  // 2. DEPOSIT FUNDS (Add to liquid wallet balance)
-  const handleDepositSubmit = (e: React.FormEvent) => {
+  // 2. DEPOSIT FUNDS — server-side API (PENDING status, no immediate balance credit)
+  const handleDepositSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !wallet || !depositAmount) return;
 
@@ -270,41 +274,50 @@ export default function DashboardPage() {
     if (isNaN(amountNum) || amountNum <= 0) return;
 
     const sourceAccount = linkedAccounts.find(a => a.id === depositSource);
-    if (!sourceAccount) return;
 
-    wallet.wallet_balance += amountNum;
-    DB.saveWallet(wallet);
+    setIsProcessing(true);
+    try {
+      const res = await fetch('/api/deposits/initiate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          amount: amountNum,
+          paymentMethod: 'direct_bank_transfer',
+          description: sourceAccount ? `Direct Deposit from ${sourceAccount.bank_name}` : 'Direct Deposit',
+        }),
+      });
+      const data = await res.json();
 
-    DB.addTransaction({
-      user_id: currentUser.id,
-      wallet_id: wallet.id,
-      type: 'deposit',
-      amount: amountNum,
-      status: 'completed',
-      reference: `TX-DEP-${Math.floor(1000 + Math.random() * 9000)}`,
-      category: 'income',
-      description: `ACH Deposit from ${sourceAccount.bank_name}`
-    });
+      if (!res.ok || !data.success) {
+        alert(data.error || 'Failed to initiate deposit.');
+        setIsProcessing(false);
+        return;
+      }
 
-    logSimulation(
-      'Email',
-      'Fluid Balance Deposited',
-      currentUser.email,
-      `Hi ${currentUser.name},\n\nYou have deposited ₦${amountNum.toFixed(2)} into your AFFY SAVINGS wallet balance from ${sourceAccount.bank_name}.\n\nFluid Balance: ₦${wallet.wallet_balance.toFixed(2)}.`
-    );
-    logSimulation(
-      'WhatsApp',
-      'Deposit Credit Success',
-      currentUser.phone || '+234 810 315 1999',
-      `AFFY SAVINGS: Deposited ₦${amountNum.toFixed(2)} from ${sourceAccount.bank_name}. Liquid Balance: ₦${wallet.wallet_balance.toFixed(2)}.`
-    );
+      // Also record in localStorage for offline display
+      DB.addTransaction({
+        user_id: currentUser.id,
+        wallet_id: wallet.id,
+        type: 'deposit',
+        amount: amountNum,
+        status: 'pending',
+        reference: data.reference || `TX-DEP-${Math.floor(1000 + Math.random() * 9000)}`,
+        category: 'income',
+        description: sourceAccount ? `Direct Deposit from ${sourceAccount.bank_name} (Pending)` : 'Direct Deposit (Pending)',
+      });
 
-    DB.addAuditLog(currentUser.id, 'Deposit Completed (ACH)', { amount: amountNum, bankName: sourceAccount.bank_name });
-    DB.addInAppNotification(currentUser.id, 'Fluid Deposit Credited', `+₦${amountNum.toFixed(2)} credited from ${sourceAccount.bank_name}.`, 'transaction');
+      DB.addAuditLog(currentUser.id, 'Deposit Initiated (Pending Verification)', { amount: amountNum, reference: data.reference });
+      DB.addInAppNotification(currentUser.id, 'Deposit Under Review', `₦${amountNum.toFixed(2)} deposit is pending Finance verification.`, 'transaction');
 
-    setDepositAmount('');
-    setDepositModal(false);
-    refreshData();
+      setDepositAmount('');
+      setDepositModal(false);
+      refreshData();
+    } catch (err) {
+      console.error('[Deposit] Error:', err);
+      alert('Unable to reach server. Please try again.');
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   // eTranzact payment handlers
@@ -460,54 +473,68 @@ export default function DashboardPage() {
     }, 1000);
   };
 
-  // 3. WITHDRAW FUNDS (Transfer out of liquid wallet balance)
-  const handleWithdrawalSubmit = (e: React.FormEvent) => {
+  // 3. WITHDRAW FUNDS — server-side API with 4-digit PIN (escrow reservation)
+  const handleWithdrawalSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !wallet || !withdrawAmount) return;
 
     const amountNum = parseFloat(withdrawAmount);
     if (isNaN(amountNum) || amountNum <= 0) return;
 
-    if (wallet.wallet_balance < amountNum) {
-      alert("Insufficient fluid wallet balance.");
+    if (!withdrawPin || withdrawPin.length !== 4) {
+      setWithdrawError('Please enter your 4-digit transaction PIN.');
       return;
     }
 
     const sourceAccount = linkedAccounts.find(a => a.id === withdrawSource);
-    if (!sourceAccount) return;
+    if (!sourceAccount) {
+      setWithdrawError('Please select a destination bank account.');
+      return;
+    }
 
-    wallet.wallet_balance -= amountNum;
-    DB.saveWallet(wallet);
+    setWithdrawError('');
+    setIsProcessing(true);
+    try {
+      const res = await fetch('/api/withdrawals/request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          amount: amountNum,
+          accountId: sourceAccount.id,
+          pin: withdrawPin.trim(),
+        }),
+      });
+      const data = await res.json();
 
-    DB.addTransaction({
-      user_id: currentUser.id,
-      wallet_id: wallet.id,
-      type: 'withdrawal',
-      amount: amountNum,
-      status: 'completed',
-      reference: `TX-WTH-${Math.floor(1000 + Math.random() * 9000)}`,
-      category: 'other',
-      description: `ACH Withdrawal to ${sourceAccount.bank_name}`
-    });
+      if (!res.ok || !data.success) {
+        setWithdrawError(data.error || 'Withdrawal request failed.');
+        setIsProcessing(false);
+        return;
+      }
 
-    logSimulation(
-      'Email',
-      'Fluid Balance Withdrawal Alert',
-      currentUser.email,
-      `Hi ${currentUser.name},\n\nYou have requested a withdrawal of ₦${amountNum.toFixed(2)} from your wallet to your linked ${sourceAccount.bank_name}.\n\nFluid Balance remaining: ₦${wallet.wallet_balance.toFixed(2)}.`
-    );
-    logSimulation(
-      'WhatsApp',
-      'Withdrawal Debit success',
-      currentUser.phone || '+234 810 315 1999',
-      `AFFY SAVINGS: Withdrew ₦${amountNum.toFixed(2)} to ${sourceAccount.bank_name}. Remaining balance: ₦${wallet.wallet_balance.toFixed(2)}.`
-    );
+      // Mirror in localStorage for offline display
+      DB.addTransaction({
+        user_id: currentUser.id,
+        wallet_id: wallet.id,
+        type: 'withdrawal',
+        amount: amountNum,
+        status: 'pending',
+        reference: data.reference || `TX-WTH-${Math.floor(1000 + Math.random() * 9000)}`,
+        category: 'other',
+        description: `Withdrawal to ${sourceAccount.bank_name} (Pending Settlement)`,
+      });
 
-    DB.addAuditLog(currentUser.id, 'Withdrawal Completed', { amount: amountNum, bankName: sourceAccount.bank_name });
-    
-    setWithdrawAmount('');
-    setWithdrawModal(false);
-    refreshData();
+      DB.addAuditLog(currentUser.id, 'Withdrawal Requested (Pending Settlement)', { amount: amountNum, bankName: sourceAccount.bank_name });
+      DB.addInAppNotification(currentUser.id, 'Withdrawal Processing', `₦${amountNum.toFixed(2)} withdrawal to ${sourceAccount.bank_name} is pending Finance settlement.`, 'transaction');
+
+      closeWithdrawModal();
+      refreshData();
+    } catch (err) {
+      console.error('[Withdrawal] Error:', err);
+      setWithdrawError('Unable to reach server. Please try again.');
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   // 4. CREATE SAVINGS PLAN
@@ -1899,6 +1926,9 @@ export default function DashboardPage() {
               </div>
             ) : (
               <form onSubmit={handleWithdrawalSubmit} className="space-y-4 font-sans">
+                {withdrawError && (
+                  <div className="bg-red-500/10 border border-red-500/20 text-red-500 text-xs p-3 rounded-xl">{withdrawError}</div>
+                )}
                 <div>
                   <label className="block text-[9px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-widest mb-1.5">Destination Bank</label>
                   <select
@@ -1929,12 +1959,27 @@ export default function DashboardPage() {
                   <p className="text-[9px] text-zinc-400 mt-1.5 font-bold">Liquid Balance: ₦{wallet.wallet_balance.toLocaleString(undefined, {minimumFractionDigits: 2})}</p>
                 </div>
 
+                <div>
+                  <label className="block text-[9px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-widest mb-1.5">4-Digit Transaction PIN</label>
+                  <input
+                    type="password"
+                    maxLength={4}
+                    placeholder="••••"
+                    value={withdrawPin}
+                    onChange={(e) => setWithdrawPin(e.target.value)}
+                    className="w-full text-center tracking-widest text-lg px-4 py-2.5 rounded-xl bg-input-bg border border-border/60 focus:border-primary focus:outline-none"
+                    required
+                  />
+                  <p className="text-[9px] text-zinc-500 mt-1.5">Your 4-digit PIN set during registration.</p>
+                </div>
+
                 <button
                   type="submit"
+                  disabled={isProcessing}
                   style={{ backgroundColor: cms.branding.primaryColor }}
-                  className="w-full text-white text-xs font-bold py-3.5 rounded-xl hover:opacity-95 transition-opacity mt-4 cursor-pointer font-sans shadow-md shadow-primary/10"
+                  className="w-full text-white text-xs font-bold py-3.5 rounded-xl hover:opacity-95 transition-opacity mt-4 cursor-pointer font-sans shadow-md shadow-primary/10 disabled:opacity-50"
                 >
-                  Approve Withdrawal
+                  {isProcessing ? 'Processing Withdrawal...' : 'Authorize Withdrawal'}
                 </button>
               </form>
             )}

@@ -32,7 +32,12 @@ import {
   Trash2,
   Check,
   Clock,
-  Eye
+  Eye,
+  Key,
+  Shield,
+  UserCheck,
+  UserX,
+  UserPlus
 } from 'lucide-react';
 import Link from 'next/link';
 import AffyLogo from '@/components/AffyLogo';
@@ -48,7 +53,18 @@ export default function AdminPortal() {
     }
   }, [currentStaff, router]);
 
-  const [activeSubTab, setActiveSubTab] = useState<'cms' | 'users' | 'portfolios' | 'audit' | 'transactions' | 'food_reserve'>('cms');
+  const [activeSubTab, setActiveSubTab] = useState<'cms' | 'staff' | 'users' | 'portfolios' | 'audit' | 'transactions' | 'food_reserve'>('cms');
+
+  // Staff management state
+  const [staffList, setStaffList] = useState<any[]>([]);
+  const [loadingStaff, setLoadingStaff] = useState(false);
+  const [staffError, setStaffError] = useState('');
+  const [addStaffModal, setAddStaffModal] = useState(false);
+  const [addStaffData, setAddStaffData] = useState({ name: '', email: '', role: 'Finance', password: '' });
+  const [roleModal, setRoleModal] = useState<{ open: boolean; staff: any | null; newRole: string }>({ open: false, staff: null, newRole: 'Finance' });
+  const [resetPasswordModal, setResetPasswordModal] = useState<{ open: boolean; staff: any | null; newPassword: string }>({ open: false, staff: null, newPassword: '' });
+  const [selfPasswordModal, setSelfPasswordModal] = useState(false);
+  const [selfPasswordData, setSelfPasswordData] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
   
   // Data lists
   const [users, setUsers] = useState<User[]>([]);
@@ -112,6 +128,141 @@ export default function AdminPortal() {
     setFoodPackages(DB.getFoodPackages());
     setFoodItems(DB.getFoodItems());
     setFoodOrders(DB.getFoodOrders());
+    fetchStaffList();
+  };
+
+  const fetchStaffList = async () => {
+    setLoadingStaff(true);
+    setStaffError('');
+    try {
+      const res = await fetch('/api/staff');
+      const data = await res.json();
+      if (data.success && data.staff) {
+        setStaffList(data.staff);
+      } else {
+        setStaffError(data.error || 'Failed to load staff list.');
+      }
+    } catch {
+      setStaffError('Unable to connect to server.');
+    } finally {
+      setLoadingStaff(false);
+    }
+  };
+
+  const handleCreateStaff = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setStaffError('');
+    try {
+      const res = await fetch('/api/staff/invite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(addStaffData),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setStaffError(data.error || 'Failed to create staff member.');
+        return;
+      }
+      setSuccessMsg(data.message || 'Staff member created successfully.');
+      setAddStaffModal(false);
+      setAddStaffData({ name: '', email: '', role: 'Finance', password: '' });
+      fetchStaffList();
+      setTimeout(() => setSuccessMsg(''), 4000);
+    } catch {
+      setStaffError('Network error while creating staff.');
+    }
+  };
+
+  const handleChangeRole = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!roleModal.staff) return;
+    setStaffError('');
+    try {
+      const res = await fetch(`/api/staff/${roleModal.staff.id}/role`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: roleModal.newRole }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setStaffError(data.error || 'Failed to change staff role.');
+        return;
+      }
+      setSuccessMsg(`Role for ${roleModal.staff.email} changed to ${roleModal.newRole}.`);
+      setRoleModal({ open: false, staff: null, newRole: 'Finance' });
+      fetchStaffList();
+      setTimeout(() => setSuccessMsg(''), 4000);
+    } catch {
+      setStaffError('Network error while changing role.');
+    }
+  };
+
+  const handleToggleStatus = async (staff: any) => {
+    setStaffError('');
+    const newStatus = !staff.is_active;
+    try {
+      const res = await fetch(`/api/staff/${staff.id}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_active: newStatus }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setStaffError(data.error || 'Failed to update staff status.');
+        return;
+      }
+      setSuccessMsg(`Staff account ${staff.email} ${newStatus ? 'activated' : 'deactivated'}.`);
+      fetchStaffList();
+      setTimeout(() => setSuccessMsg(''), 4000);
+    } catch {
+      setStaffError('Network error while updating status.');
+    }
+  };
+
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!resetPasswordModal.staff) return;
+    setStaffError('');
+    try {
+      const res = await fetch(`/api/staff/${resetPasswordModal.staff.id}/password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: resetPasswordModal.newPassword }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setStaffError(data.error || 'Failed to reset password.');
+        return;
+      }
+      setSuccessMsg(`Password for ${resetPasswordModal.staff.email} reset successfully.`);
+      setResetPasswordModal({ open: false, staff: null, newPassword: '' });
+      setTimeout(() => setSuccessMsg(''), 4000);
+    } catch {
+      setStaffError('Network error while resetting password.');
+    }
+  };
+
+  const handleChangeSelfPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setStaffError('');
+    try {
+      const res = await fetch('/api/staff/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(selfPasswordData),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setStaffError(data.error || 'Failed to change password.');
+        return;
+      }
+      setSuccessMsg('Your password has been changed successfully.');
+      setSelfPasswordModal(false);
+      setSelfPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
+      setTimeout(() => setSuccessMsg(''), 4000);
+    } catch {
+      setStaffError('Network error while changing password.');
+    }
   };
 
   if (!currentStaff || !cmsForm) {
@@ -481,6 +632,17 @@ export default function AdminPortal() {
               <span className="text-[10px] font-mono font-bold tracking-wider text-foreground">AFFY SAVINGS SUPER ADMIN PANEL</span>
             </div>
             <button 
+              onClick={() => {
+                setStaffError('');
+                setSelfPasswordModal(true);
+              }}
+              title="Change My Password"
+              className="text-zinc-400 hover:text-foreground p-2.5 rounded-xl hover:bg-neutral-gray transition-colors cursor-pointer border border-border/30 bg-card-bg/50 flex items-center gap-1.5 text-xs font-bold"
+            >
+              <Key size={14} />
+              <span className="hidden sm:inline">Change Password</span>
+            </button>
+            <button 
               onClick={handleStaffLogout}
               className="text-zinc-500 hover:text-red-500 p-2.5 rounded-xl hover:bg-red-500/10 transition-colors cursor-pointer border border-border/30 bg-card-bg/50"
             >
@@ -500,6 +662,19 @@ export default function AdminPortal() {
             className={`pb-3.5 border-b-2 px-1 transition-colors cursor-pointer font-display ${activeSubTab === 'cms' ? 'border-primary text-primary' : 'border-transparent text-zinc-400 hover:text-foreground'}`}
           >
             System Branding & Rules
+          </button>
+          <button 
+            onClick={() => {
+              setActiveSubTab('staff');
+              fetchStaffList();
+            }}
+            className={`pb-3.5 border-b-2 px-1 transition-colors cursor-pointer font-display flex items-center gap-1.5 ${activeSubTab === 'staff' ? 'border-primary text-primary' : 'border-transparent text-zinc-400 hover:text-foreground'}`}
+          >
+            <Shield size={14} />
+            <span>Staff Management</span>
+            <span className="bg-primary/20 text-primary text-[10px] font-bold px-1.5 py-0.5 rounded-full font-mono">
+              {staffList.length}
+            </span>
           </button>
           <button 
             onClick={() => {
@@ -752,6 +927,144 @@ export default function AdminPortal() {
             </div>
 
           </form>
+        )}
+
+        {/* SUBTAB: STAFF MANAGEMENT */}
+        {activeSubTab === 'staff' && (
+          <div className="bg-card-bg border border-border/40 rounded-3xl p-6 md:p-8 shadow-sm space-y-6 text-xs font-sans hover-lift animate-fade-in">
+            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 pb-4 border-b border-border/30">
+              <div>
+                <h3 className="text-base font-bold font-display text-foreground flex items-center gap-2">
+                  <Shield size={18} className="text-primary" />
+                  Staff Officers & RBAC Directory
+                </h3>
+                <p className="text-xs text-zinc-400">Manage backoffice accounts, roles, access permissions, and credential security.</p>
+              </div>
+              <button 
+                type="button"
+                onClick={() => {
+                  setStaffError('');
+                  setAddStaffModal(true);
+                }}
+                className="bg-primary hover:bg-primary-hover text-white text-xs font-bold px-5 py-2.5 rounded-xl transition-all flex items-center gap-2 shadow-md shadow-primary/20 cursor-pointer self-start sm:self-center"
+              >
+                <UserPlus size={15} />
+                Register Staff Account
+              </button>
+            </div>
+
+            {staffError && (
+              <div className="bg-red-500/5 border border-red-500/15 text-red-500 text-xs p-4 rounded-2xl flex items-center gap-2.5 font-bold">
+                <AlertTriangle size={16} />
+                <span>{staffError}</span>
+              </div>
+            )}
+
+            {loadingStaff ? (
+              <div className="py-12 text-center text-zinc-400 font-mono text-xs">
+                Loading backoffice staff directory...
+              </div>
+            ) : staffList.length === 0 ? (
+              <div className="py-12 text-center text-zinc-400 text-xs">
+                No staff accounts found. Click "Register Staff Account" above to create one.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="border-b border-border/40 text-zinc-400 font-bold uppercase tracking-widest text-[9px]">
+                      <th className="py-3 px-4">Staff Officer</th>
+                      <th className="py-3 px-4">Assigned Role</th>
+                      <th className="py-3 px-4">Permissions Scope</th>
+                      <th className="py-3 px-4">Status</th>
+                      <th className="py-3 px-4">Registered</th>
+                      <th className="py-3 px-4 text-right">Admin Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/30">
+                    {staffList.map((st) => (
+                      <tr key={st.id} className="hover:bg-neutral-gray/30 transition-colors">
+                        <td className="py-4 px-4">
+                          <div className="font-bold text-foreground">{st.name}</div>
+                          <div className="text-[11px] font-mono text-zinc-400">{st.email}</div>
+                        </td>
+                        <td className="py-4 px-4">
+                          <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-1 rounded-full uppercase tracking-wider ${
+                            st.role === 'Super Admin'
+                              ? 'bg-purple-500/10 text-purple-400 border border-purple-500/20'
+                              : st.role === 'Finance'
+                              ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                              : st.role === 'Operations'
+                              ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20'
+                              : st.role === 'Compliance'
+                              ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                              : 'bg-zinc-500/10 text-zinc-400 border border-border'
+                          }`}>
+                            {st.role}
+                          </span>
+                        </td>
+                        <td className="py-4 px-4">
+                          <div className="flex flex-wrap gap-1 max-w-xs">
+                            {Array.isArray(st.permissions) && st.permissions.map((perm: string, pIdx: number) => (
+                              <span key={pIdx} className="text-[9px] font-mono bg-neutral-gray text-zinc-400 px-1.5 py-0.5 rounded">
+                                {perm}
+                              </span>
+                            ))}
+                          </div>
+                        </td>
+                        <td className="py-4 px-4">
+                          {st.is_active ? (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full">
+                              <UserCheck size={12} /> Active
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold text-zinc-400 bg-zinc-500/10 px-2 py-0.5 rounded-full">
+                              <UserX size={12} /> Inactive
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-4 px-4 text-zinc-400 font-mono text-[10px]">
+                          {st.created_at ? new Date(st.created_at).toLocaleDateString() : 'System Seed'}
+                        </td>
+                        <td className="py-4 px-4 text-right">
+                          <div className="flex items-center justify-end gap-2">
+                            <button
+                              onClick={() => {
+                                setStaffError('');
+                                setRoleModal({ open: true, staff: st, newRole: st.role });
+                              }}
+                              className="text-[10px] font-bold px-2.5 py-1.5 rounded-lg border border-border hover:bg-neutral-gray text-zinc-300 hover:text-foreground transition-colors cursor-pointer"
+                            >
+                              Change Role
+                            </button>
+                            <button
+                              onClick={() => {
+                                setStaffError('');
+                                setResetPasswordModal({ open: true, staff: st, newPassword: '' });
+                              }}
+                              className="text-[10px] font-bold px-2.5 py-1.5 rounded-lg border border-border hover:bg-neutral-gray text-zinc-300 hover:text-foreground transition-colors cursor-pointer flex items-center gap-1"
+                            >
+                              <Key size={11} /> Reset Pwd
+                            </button>
+                            <button
+                              onClick={() => handleToggleStatus(st)}
+                              className={`text-[10px] font-bold px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer ${
+                                st.is_active
+                                  ? 'bg-red-500/10 text-red-500 hover:bg-red-500/20'
+                                  : 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20'
+                              }`}
+                            >
+                              {st.is_active ? 'Deactivate' : 'Activate'}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         )}
 
         {/* SUBTAB 2.5: PENDING TRANSFERS APPROVAL */}
@@ -1618,6 +1931,289 @@ export default function AdminPortal() {
                   className="w-full bg-emerald-500 hover:bg-emerald-600 text-white py-3 rounded-xl font-bold cursor-pointer transition-opacity mt-4"
                 >
                   Save Status & Notify Customer
+                </button>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL 1: REGISTER / INVITE STAFF MEMBER */}
+        {addStaffModal && (
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="w-full max-w-md bg-card-bg border border-border/50 rounded-3xl p-6 shadow-2xl relative animate-fade-in">
+              <button
+                onClick={() => setAddStaffModal(false)}
+                className="absolute right-5 top-5 text-zinc-400 hover:text-foreground cursor-pointer p-1 rounded-full hover:bg-neutral-gray"
+              >
+                <X size={18} />
+              </button>
+
+              <h3 className="text-base font-bold font-display text-foreground mb-1 flex items-center gap-2">
+                <UserPlus size={18} className="text-primary" />
+                Register Staff Officer
+              </h3>
+              <p className="text-xs text-zinc-400 mb-4">
+                Provision a verified backoffice staff account with strict role-based access.
+              </p>
+
+              {staffError && (
+                <div className="bg-red-500/5 border border-red-500/15 text-red-500 text-xs p-3 rounded-xl mb-4">
+                  {staffError}
+                </div>
+              )}
+
+              <form onSubmit={handleCreateStaff} className="space-y-3.5 text-xs">
+                <div>
+                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Full Legal Name</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. John Doe"
+                    value={addStaffData.name}
+                    onChange={(e) => setAddStaffData({ ...addStaffData, name: e.target.value })}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-input-bg border border-border/60 focus:border-primary focus:outline-none"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Work Email Address</label>
+                  <input
+                    type="email"
+                    placeholder="e.g. john@affysavings.com"
+                    value={addStaffData.email}
+                    onChange={(e) => setAddStaffData({ ...addStaffData, email: e.target.value })}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-input-bg border border-border/60 focus:border-primary focus:outline-none"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Assigned Backoffice Role</label>
+                  <select
+                    value={addStaffData.role}
+                    onChange={(e) => setAddStaffData({ ...addStaffData, role: e.target.value })}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-input-bg border border-border/60 focus:border-primary focus:outline-none font-bold"
+                  >
+                    <option value="Super Admin">Super Admin (Full System Control)</option>
+                    <option value="Operations">Operations (User Management & Approvals)</option>
+                    <option value="Customer Support">Customer Support (User & Transaction Inquiry)</option>
+                    <option value="Compliance">Compliance (KYC, Audits & Account Unlocks)</option>
+                    <option value="Finance">Finance (Transaction Approvals & Metrics)</option>
+                    <option value="Content Manager">Content Manager (CMS & Landing Page)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Initial Password (Min 8 Characters)</label>
+                  <input
+                    type="password"
+                    placeholder="Create secure staff password"
+                    value={addStaffData.password}
+                    onChange={(e) => setAddStaffData({ ...addStaffData, password: e.target.value })}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-input-bg border border-border/60 focus:border-primary focus:outline-none"
+                    minLength={8}
+                    required
+                  />
+                </div>
+
+                <div className="p-3 bg-neutral-gray/40 rounded-xl text-[10px] text-zinc-400 space-y-1">
+                  <div><strong>Role Permissions:</strong> Derived automatically by server based on role.</div>
+                  <div><strong>Authentication:</strong> Encrypted using production scrypt hash engine.</div>
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full bg-primary hover:bg-primary-hover text-white py-3 rounded-xl font-bold cursor-pointer transition-opacity mt-4"
+                >
+                  Create & Activate Staff Officer
+                </button>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL 2: CHANGE ROLE MODAL */}
+        {roleModal.open && roleModal.staff && (
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="w-full max-w-md bg-card-bg border border-border/50 rounded-3xl p-6 shadow-2xl relative animate-fade-in">
+              <button
+                onClick={() => setRoleModal({ open: false, staff: null, newRole: 'Finance' })}
+                className="absolute right-5 top-5 text-zinc-400 hover:text-foreground cursor-pointer p-1 rounded-full hover:bg-neutral-gray"
+              >
+                <X size={18} />
+              </button>
+
+              <h3 className="text-base font-bold font-display text-foreground mb-1">
+                Change Staff Role
+              </h3>
+              <p className="text-xs text-zinc-400 mb-4">
+                Modify role and auto-derive permissions for <span className="font-mono text-primary font-bold">{roleModal.staff.email}</span>
+              </p>
+
+              {staffError && (
+                <div className="bg-red-500/5 border border-red-500/15 text-red-500 text-xs p-3 rounded-xl mb-4">
+                  {staffError}
+                </div>
+              )}
+
+              <form onSubmit={handleChangeRole} className="space-y-3.5 text-xs">
+                <div>
+                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">New Role</label>
+                  <select
+                    value={roleModal.newRole}
+                    onChange={(e) => setRoleModal({ ...roleModal, newRole: e.target.value })}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-input-bg border border-border/60 focus:border-primary focus:outline-none font-bold"
+                  >
+                    <option value="Super Admin">Super Admin (Full System Control)</option>
+                    <option value="Operations">Operations (User Management & Approvals)</option>
+                    <option value="Customer Support">Customer Support (User & Transaction Inquiry)</option>
+                    <option value="Compliance">Compliance (KYC, Audits & Account Unlocks)</option>
+                    <option value="Finance">Finance (Transaction Approvals & Metrics)</option>
+                    <option value="Content Manager">Content Manager (CMS & Landing Page)</option>
+                  </select>
+                </div>
+
+                <div className="p-3 bg-neutral-gray/40 rounded-xl text-[10px] text-zinc-400 space-y-1">
+                  <div><strong>Current Role:</strong> {roleModal.staff.role}</div>
+                  <div><strong>Target Role:</strong> {roleModal.newRole}</div>
+                  <div><strong>Audit:</strong> Role changes are permanently recorded in system audit logs.</div>
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full bg-primary hover:bg-primary-hover text-white py-3 rounded-xl font-bold cursor-pointer transition-opacity mt-4"
+                >
+                  Save New Role
+                </button>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL 3: RESET STAFF PASSWORD MODAL */}
+        {resetPasswordModal.open && resetPasswordModal.staff && (
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="w-full max-w-md bg-card-bg border border-border/50 rounded-3xl p-6 shadow-2xl relative animate-fade-in">
+              <button
+                onClick={() => setResetPasswordModal({ open: false, staff: null, newPassword: '' })}
+                className="absolute right-5 top-5 text-zinc-400 hover:text-foreground cursor-pointer p-1 rounded-full hover:bg-neutral-gray"
+              >
+                <X size={18} />
+              </button>
+
+              <h3 className="text-base font-bold font-display text-foreground mb-1 flex items-center gap-2">
+                <Key size={18} className="text-primary" />
+                Reset Staff Password
+              </h3>
+              <p className="text-xs text-zinc-400 mb-4">
+                Assign a new password for <span className="font-mono text-primary font-bold">{resetPasswordModal.staff.email}</span>.
+              </p>
+
+              {staffError && (
+                <div className="bg-red-500/5 border border-red-500/15 text-red-500 text-xs p-3 rounded-xl mb-4">
+                  {staffError}
+                </div>
+              )}
+
+              <form onSubmit={handleResetPassword} className="space-y-3.5 text-xs">
+                <div>
+                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">New Password (Min 8 Characters)</label>
+                  <input
+                    type="password"
+                    placeholder="Enter new password"
+                    value={resetPasswordModal.newPassword}
+                    onChange={(e) => setResetPasswordModal({ ...resetPasswordModal, newPassword: e.target.value })}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-input-bg border border-border/60 focus:border-primary focus:outline-none"
+                    minLength={8}
+                    required
+                  />
+                </div>
+
+                <div className="p-3 bg-neutral-gray/40 rounded-xl text-[10px] text-zinc-400 space-y-1">
+                  <div><strong>Security:</strong> The plaintext password will never be logged or displayed.</div>
+                  <div><strong>Storage:</strong> Stored securely as an scrypt hash.</div>
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full bg-primary hover:bg-primary-hover text-white py-3 rounded-xl font-bold cursor-pointer transition-opacity mt-4"
+                >
+                  Confirm Password Reset
+                </button>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL 4: SELF-SERVICE PASSWORD CHANGE MODAL */}
+        {selfPasswordModal && (
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="w-full max-w-md bg-card-bg border border-border/50 rounded-3xl p-6 shadow-2xl relative animate-fade-in">
+              <button
+                onClick={() => setSelfPasswordModal(false)}
+                className="absolute right-5 top-5 text-zinc-400 hover:text-foreground cursor-pointer p-1 rounded-full hover:bg-neutral-gray"
+              >
+                <X size={18} />
+              </button>
+
+              <h3 className="text-base font-bold font-display text-foreground mb-1 flex items-center gap-2">
+                <Key size={18} className="text-primary" />
+                Change My Password
+              </h3>
+              <p className="text-xs text-zinc-400 mb-4">
+                Update your backoffice credentials.
+              </p>
+
+              {staffError && (
+                <div className="bg-red-500/5 border border-red-500/15 text-red-500 text-xs p-3 rounded-xl mb-4">
+                  {staffError}
+                </div>
+              )}
+
+              <form onSubmit={handleChangeSelfPassword} className="space-y-3.5 text-xs">
+                <div>
+                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Current Password</label>
+                  <input
+                    type="password"
+                    placeholder="Enter current password"
+                    value={selfPasswordData.currentPassword}
+                    onChange={(e) => setSelfPasswordData({ ...selfPasswordData, currentPassword: e.target.value })}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-input-bg border border-border/60 focus:border-primary focus:outline-none"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">New Password (Min 8 Characters)</label>
+                  <input
+                    type="password"
+                    placeholder="Enter new password"
+                    value={selfPasswordData.newPassword}
+                    onChange={(e) => setSelfPasswordData({ ...selfPasswordData, newPassword: e.target.value })}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-input-bg border border-border/60 focus:border-primary focus:outline-none"
+                    minLength={8}
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Confirm New Password</label>
+                  <input
+                    type="password"
+                    placeholder="Confirm new password"
+                    value={selfPasswordData.confirmPassword}
+                    onChange={(e) => setSelfPasswordData({ ...selfPasswordData, confirmPassword: e.target.value })}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-input-bg border border-border/60 focus:border-primary focus:outline-none"
+                    minLength={8}
+                    required
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full bg-primary hover:bg-primary-hover text-white py-3 rounded-xl font-bold cursor-pointer transition-opacity mt-4"
+                >
+                  Update Password
                 </button>
               </form>
             </div>
