@@ -63,8 +63,7 @@ export async function POST(request: NextRequest) {
         status: 'pending',
         reference: txRef,
         category: 'income',
-        description: description || `Direct Bank Deposit (Pending Verification)`,
-        payment_method: paymentMethod || 'direct_bank_transfer',
+        description: description || `Direct Bank Deposit (${paymentMethod || 'bank_transfer'})`,
         created_at: now,
       })
       .select('*')

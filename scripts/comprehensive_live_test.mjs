@@ -15,7 +15,7 @@ envFile.split('\n').forEach(line => {
   }
 });
 
-const BASE_URL = 'http://localhost:3001';
+const BASE_URL = process.env.BASE_URL || 'http://localhost:3005';
 const supabaseUrl = env.NEXT_PUBLIC_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseKey = env.SUPABASE_SERVICE_ROLE_KEY || env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 const sessionSecret = env.AFFY_SESSION_SECRET || env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'affy-savings-default-production-secure-session-key-2026';
@@ -221,7 +221,8 @@ async function runLiveVerification() {
   // Set customer PIN hash in DB if not set
   const pin = '1234';
   const salt = crypto.randomBytes(16).toString('hex');
-  const pinHash = crypto.scryptSync(pin, salt, 64).toString('hex') + ':' + salt;
+  const derivedKey = crypto.scryptSync(pin, salt, 64, { N: 16384, r: 8, p: 1 }).toString('hex');
+  const pinHash = `scrypt$${salt}$${derivedKey}`;
   await supabase.from('users').update({ pin_hash: pinHash }).eq('id', customer.id);
 
   // Link a dummy verified bank account
@@ -324,7 +325,7 @@ async function runLiveVerification() {
   }
 
   // ------------------------------------------------------------------------------------------------
-  // REQUIREMENT 5: CUSTOMER SUPPORT CONFIDENTIALITY & DATA LEAKAGE TEST
+  // REQUIREMENT 5: CUSTOMER SUPPORT CONFIDENTIALITY & SENSITIVE CREDENTIAL CHECK
   // ------------------------------------------------------------------------------------------------
   console.log("\n--- [5] CUSTOMER SUPPORT CONFIDENTIALITY & SENSITIVE CREDENTIAL CHECK ---");
   const supportUsersRes = await fetch(`${BASE_URL}/api/admin/users`, {
@@ -351,6 +352,13 @@ async function runLiveVerification() {
     } else {
       fail("Security Failure: Credential Leakage", `Sensitive fields detected: ${leakedKeys.join(', ')}`);
     }
+
+    const realCust = supportUsersData.users.find(u => u.email === customer.email);
+    if (realCust && realCust.name && realCust.phone) {
+      pass("Customer Support Information Display", `Verified name (${realCust.name}), email (${realCust.email}), and phone (${realCust.phone}) present`);
+    } else {
+      fail("Customer Support Information Display", "Real customer details missing in Support view");
+    }
   } else {
     fail("Customer Support Query", supportUsersData.error || "Failed to retrieve users list");
   }
@@ -359,41 +367,59 @@ async function runLiveVerification() {
   // REQUIREMENT 6: ROLE AUTHORIZATION & PERMISSION ENFORCEMENT
   // ------------------------------------------------------------------------------------------------
   console.log("\n--- [6] ROLE AUTHORIZATION & PERMISSION ENFORCEMENT ---");
-  // Test 6.1: Customer attempts to approve a transaction
+  // Test 6.1: Customer attempts to approve a deposit
   const custApproveAttempt = await fetch(`${BASE_URL}/api/deposits/approve`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Cookie': customerCookie },
     body: JSON.stringify({ transactionId: 'dummy-id' })
   });
   if (custApproveAttempt.status === 401 || custApproveAttempt.status === 403) {
-    pass("Customer Approval Blocked", "Customer cannot approve their own or other transactions (HTTP 401/403)");
+    pass("Customer Approval Blocked (Deposits)", "Customer cannot approve transactions (HTTP 401/403)");
   } else {
-    fail("Customer Approval Blocked", `Customer got HTTP ${custApproveAttempt.status}`);
+    fail("Customer Approval Blocked (Deposits)", `Customer got HTTP ${custApproveAttempt.status}`);
   }
 
-  // Test 6.2: Customer Support attempts to approve a transaction
+  // Test 6.2: Customer attempts to approve a withdrawal
+  const custWdApproveAttempt = await fetch(`${BASE_URL}/api/withdrawals/approve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Cookie': customerCookie },
+    body: JSON.stringify({ transactionId: 'dummy-id' })
+  });
+  if (custWdApproveAttempt.status === 401 || custWdApproveAttempt.status === 403) {
+    pass("Customer Approval Blocked (Withdrawals)", "Customer cannot approve withdrawals (HTTP 401/403)");
+  } else {
+    fail("Customer Approval Blocked (Withdrawals)", `Customer got HTTP ${custWdApproveAttempt.status}`);
+  }
+
+  // Test 6.3: Customer Support attempts to approve a financial transaction
   const supportApproveAttempt = await fetch(`${BASE_URL}/api/deposits/approve`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Cookie': supportCookie },
     body: JSON.stringify({ transactionId: 'dummy-id' })
   });
   if (supportApproveAttempt.status === 403) {
-    pass("Customer Support Approval Blocked", "Customer Support staff is forbidden from approving financial transactions (HTTP 403)");
+    pass("Customer Support Financial Action Blocked", "Customer Support staff is forbidden from approving financial transactions (HTTP 403)");
   } else {
-    fail("Customer Support Approval Blocked", `Support got HTTP ${supportApproveAttempt.status}`);
+    fail("Customer Support Financial Action Blocked", `Support got HTTP ${supportApproveAttempt.status}`);
+  }
+
+  // Test 6.4: Finance staff attempts Super Admin function (Invite Staff / Change Role)
+  const financeSuperAdminAttempt = await fetch(`${BASE_URL}/api/staff/invite`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Cookie': financeCookie },
+    body: JSON.stringify({ email: 'hacker@affysavings.com', name: 'Hacker', role: 'Super Admin' })
+  });
+  if (financeSuperAdminAttempt.status === 403) {
+    pass("Finance Super Admin Restriction", "Finance staff cannot perform Super Admin staff invitation/management (HTTP 403)");
+  } else {
+    fail("Finance Super Admin Restriction", `Finance got HTTP ${financeSuperAdminAttempt.status}`);
   }
 
   // ------------------------------------------------------------------------------------------------
-  // REQUIREMENT 7: SUPER ADMIN ROLE SWITCHER
+  // REQUIREMENT 7: DUPLICATE / CONCURRENT APPROVAL TEST (DEPOSIT & WITHDRAWAL)
   // ------------------------------------------------------------------------------------------------
-  console.log("\n--- [7] SUPER ADMIN ROLE SWITCHER ---");
-  pass("Role Switcher UI Integrity", "Super Admin workspace switcher adjusts frontend operational view while session identity remains 'Super Admin' with immutable database privileges");
-
-  // ------------------------------------------------------------------------------------------------
-  // REQUIREMENT 8: DUPLICATE / CONCURRENT APPROVAL TEST
-  // ------------------------------------------------------------------------------------------------
-  console.log("\n--- [8] DUPLICATE / CONCURRENT APPROVAL TEST ---");
-  // Create pending deposit
+  console.log("\n--- [7] DUPLICATE / CONCURRENT APPROVAL TEST ---");
+  // 7.1 Deposit duplicate approval
   const { data: concDep } = await supabase.from('transactions').insert({
     user_id: customer.id,
     wallet_id: wallet.id,
@@ -407,7 +433,6 @@ async function runLiveVerification() {
 
   const balBeforeConc = (await supabase.from('wallets').select('balance').eq('user_id', customer.id).single()).data.balance;
 
-  // Fire 2 simultaneous approval requests
   const [resA, resB] = await Promise.all([
     fetch(`${BASE_URL}/api/deposits/approve`, {
       method: 'POST',
@@ -425,44 +450,93 @@ async function runLiveVerification() {
   const balAfterConc = (await supabase.from('wallets').select('balance').eq('user_id', customer.id).single()).data.balance;
 
   if (Number(balAfterConc) === Number(balBeforeConc) + 3000) {
-    pass("Double-Approval Concurrency Guard", `Wallet credited exactly once: ₦${balBeforeConc} -> ₦${balAfterConc}. Duplicate request safely rejected.`);
+    pass("Deposit Double-Approval Concurrency Guard", `Wallet credited exactly once: ₦${balBeforeConc} -> ₦${balAfterConc}. Second request safely rejected.`);
   } else {
-    fail("Double-Approval Concurrency Guard", `Wallet balance over-credited: ₦${balBeforeConc} -> ₦${balAfterConc}`);
+    fail("Deposit Double-Approval Concurrency Guard", `Wallet balance over-credited: ₦${balBeforeConc} -> ₦${balAfterConc}`);
   }
 
-  // ------------------------------------------------------------------------------------------------
-  // REQUIREMENT 9: DATABASE PERSISTENCE & REFRESH TEST
-  // ------------------------------------------------------------------------------------------------
-  console.log("\n--- [9] DATABASE PERSISTENCE & REFRESH TEST ---");
-  const { data: dbCheck } = await supabase.from('transactions').select('status').eq('id', concDep.id).single();
-  if (dbCheck.status === 'completed') {
-    pass("Database Persistence", "Database holds true canonical state across stateless HTTP requests");
-  }
+  // 7.2 Withdrawal duplicate approval
+  // Topup wallet balance first
+  await supabase.from('wallets').update({ balance: 5000, wallet_balance: 5000, locked_escrow_balance: 0 }).eq('user_id', customer.id);
+  const wdConcReqRes = await fetch(`${BASE_URL}/api/withdrawals/request`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Cookie': customerCookie },
+    body: JSON.stringify({ amount: 1500, accountId: linkedAcc.id, pin: '1234' })
+  });
+  const wdConcData = await wdConcReqRes.json();
+  const { data: dbWdConcTx } = await supabase.from('transactions').select('*').eq('reference', wdConcData.reference).single();
 
-  // ------------------------------------------------------------------------------------------------
-  // REQUIREMENT 10: REALTIME & REFETCH SYNC
-  // ------------------------------------------------------------------------------------------------
-  console.log("\n--- [10] REALTIME & REFETCH FALLBACK ---");
-  pass("Supabase Realtime & Polling Fallback", "Configured postgres_changes listeners on 'transactions' and 'wallets' with automatic periodic polling");
+  const [wdResA, wdResB] = await Promise.all([
+    fetch(`${BASE_URL}/api/withdrawals/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Cookie': adminCookie },
+      body: JSON.stringify({ transactionId: dbWdConcTx.id })
+    }),
+    fetch(`${BASE_URL}/api/withdrawals/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Cookie': adminCookie },
+      body: JSON.stringify({ transactionId: dbWdConcTx.id })
+    })
+  ]);
 
-  // ------------------------------------------------------------------------------------------------
-  // REQUIREMENT 11: DEMO DATA CLEANUP
-  // ------------------------------------------------------------------------------------------------
-  console.log("\n--- [11] DEMO DATA CLEANUP AUDIT ---");
-  const { data: allStaff } = await supabase.from('staff_profiles').select('*');
-  const nonAdminStaff = allStaff.filter(s => s.role === 'Super Admin' && s.email !== 'admin@affysavings.com');
-  if (nonAdminStaff.length === 0) {
-    pass("Demo Admin Cleanup Verified", "The only active Super Admin is admin@affysavings.com. Genuine customer accounts preserved.");
+  const finalWdWalletCheck = (await supabase.from('wallets').select('*').eq('user_id', customer.id).single()).data;
+  if (Number(finalWdWalletCheck.balance) === 3500 && Number(finalWdWalletCheck.locked_escrow_balance) === 0) {
+    pass("Withdrawal Double-Approval Concurrency Guard", "Withdrawal debited wallet exactly once (₦5000 -> ₦3500), duplicate approval rejected safely");
   } else {
-    fail("Demo Admin Cleanup", `Found unexpected super admins: ${nonAdminStaff.map(s => s.email).join(', ')}`);
+    fail("Withdrawal Double-Approval Concurrency Guard", `Balance unexpected: ${finalWdWalletCheck.balance}, escrow: ${finalWdWalletCheck.locked_escrow_balance}`);
   }
 
   // ------------------------------------------------------------------------------------------------
-  // REQUIREMENT 12 & 13: DATABASE CONSISTENCY & SECURITY
+  // REQUIREMENT 8: REALTIME / REFRESH & PERSISTENCE
   // ------------------------------------------------------------------------------------------------
-  console.log("\n--- [12 & 13] DATABASE CONSISTENCY & SECURITY CHECK ---");
-  pass("Database Consistency", "All balances reflect atomic operations, zero ledger divergence");
-  pass("Security Check", "Elevated SUPABASE_SERVICE_ROLE_KEY is confined strictly to server-side route handlers");
+  console.log("\n--- [8] REALTIME & PERSISTENCE ACROSS REFRESH ---");
+  // Create pending deposit
+  const depFreshRes = await fetch(`${BASE_URL}/api/deposits/initiate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Cookie': customerCookie },
+    body: JSON.stringify({ amount: 1200, paymentMethod: 'bank_transfer', description: 'Refresh Persistence Test' })
+  });
+  const depFreshData = await depFreshRes.json();
+
+  // Query customer-side session sync
+  const custTxListRes = await fetch(`${BASE_URL}/api/user/sync`, {
+    headers: { 'Cookie': customerCookie }
+  });
+  const custTxListData = await custTxListRes.json();
+  const foundInCustView = (custTxListData.transactions || []).find(t => t.reference === depFreshData.reference);
+
+  // Query finance-side session transactions
+  const finTxListRes = await fetch(`${BASE_URL}/api/finance/transactions`, {
+    headers: { 'Cookie': financeCookie }
+  });
+  const finTxListData = await finTxListRes.json();
+  const foundInFinView = (finTxListData.transactions || []).find(t => t.reference === depFreshData.reference);
+
+  if (foundInCustView && foundInFinView && foundInCustView.status === 'pending') {
+    pass("Pending State Persistence Across Dashboards", `Transaction ${depFreshData.reference} visible as 'pending' on both Customer & Finance feeds`);
+
+    // Approve from finance
+    await fetch(`${BASE_URL}/api/deposits/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Cookie': adminCookie },
+      body: JSON.stringify({ transactionId: foundInFinView.id })
+    });
+
+    // Re-query customer feed (Simulating dashboard refresh)
+    const custRefreshed = await fetch(`${BASE_URL}/api/user/sync`, {
+      headers: { 'Cookie': customerCookie }
+    });
+    const custRefreshedData = await custRefreshed.json();
+    const updatedInCust = (custRefreshedData.transactions || []).find(t => t.reference === depFreshData.reference);
+
+    if (updatedInCust && updatedInCust.status === 'completed') {
+      pass("Realtime / Refresh Parity Verified", "Customer refresh immediately reflects approved status ('completed') matching DB canonical state");
+    } else {
+      fail("Realtime / Refresh Parity", `Customer status after approval: ${updatedInCust?.status}`);
+    }
+  } else {
+    fail("Pending State Persistence", `Customer found: ${!!foundInCustView}, Finance found: ${!!foundInFinView}`);
+  }
 
   // Cleanup test transactions created during verification
   console.log("\n--- Post-Test Database Reset ---");

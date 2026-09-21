@@ -138,14 +138,9 @@ export async function POST(request: NextRequest) {
         status: 'pending',
         reference: ref,
         category: 'other',
-        description: `ACH Withdrawal to ${account.bank_name}`,
+        description: `ACH Withdrawal to ${account.bank_name} (${account.account_number})`,
+        recipient_name: account.account_holder,
         created_at: now,
-        metadata: {
-          bank_name: account.bank_name,
-          account_number: account.account_number,
-          account_holder: account.account_holder,
-          account_id: account.id,
-        },
       })
       .select('*')
       .single();
