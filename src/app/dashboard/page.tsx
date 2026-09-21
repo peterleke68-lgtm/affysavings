@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useApp } from '@/components/Providers';
 import { DB, logSimulation, Transaction, LinkedAccount, SystemNotification, SavingsPlan, FoodPackage, FoodItem, FoodOrder } from '@/services/db';
+import { supabase } from '@/services/supabaseClient';
 import AffyLogo from '@/components/AffyLogo';
 import { 
   Wallet, 
@@ -181,23 +182,97 @@ export default function DashboardPage() {
     setIsMounted(true);
     refreshData();
 
+    // 1. Supabase Realtime Subscription for instantaneous transaction/balance updates
+    let channel: any = null;
+    try {
+      if (supabase) {
+        channel = supabase
+          .channel(`user_realtime_${currentUser.id}`)
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'transactions', filter: `user_id=eq.${currentUser.id}` },
+            () => {
+              refreshData();
+            }
+          )
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'wallets', filter: `user_id=eq.${currentUser.id}` },
+            () => {
+              refreshData();
+            }
+          )
+          .subscribe();
+      }
+    } catch (realtimeErr) {
+      console.warn('[Dashboard] Realtime subscription notice:', realtimeErr);
+    }
+
+    // 2. Periodic sync with server for instant transaction status & balance updates
+    const syncInterval = setInterval(() => {
+      refreshData();
+    }, 4000);
+
+    const handleFocus = () => {
+      refreshData();
+    };
+    window.addEventListener('focus', handleFocus);
+
     const handleNotificationUpdate = () => {
       refreshNotifications();
     };
     window.addEventListener('new_in_app_notification', handleNotificationUpdate);
-    return () => window.removeEventListener('new_in_app_notification', handleNotificationUpdate);
+    return () => {
+      if (channel && supabase) {
+        supabase.removeChannel(channel);
+      }
+      clearInterval(syncInterval);
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('new_in_app_notification', handleNotificationUpdate);
+    };
   }, [currentUser]);
 
-  const refreshData = () => {
+  const refreshData = async () => {
     if (!currentUser) return;
+    try {
+      const res = await fetch('/api/user/sync');
+      const data = await res.json();
+      if (data.success) {
+        if (data.wallet) {
+          setWallet(data.wallet);
+          DB.saveWallet(data.wallet);
+        }
+        if (data.transactions) {
+          setTransactions(data.transactions);
+        }
+        if (data.savingsPlans) {
+          setSavingsPlans(data.savingsPlans);
+        }
+        if (data.linkedAccounts) {
+          setLinkedAccounts(data.linkedAccounts);
+          if (data.linkedAccounts.length > 0) {
+            const defaultAcc = data.linkedAccounts.find((a: any) => a.is_default) || data.linkedAccounts[0];
+            if (!depositSource) setDepositSource(defaultAcc.id);
+            if (!withdrawSource) setWithdrawSource(defaultAcc.id);
+          }
+        }
+        if (data.notifications) {
+          setNotifications(data.notifications);
+          setUnreadNotificationsCount(data.notifications.filter((n: any) => !n.read_at).length);
+        }
+        setFoodPackagesList(DB.getFoodPackages().filter(p => p.is_available));
+        setFoodItemsList(DB.getFoodItems().filter(i => i.in_stock));
+        return;
+      }
+    } catch (e) {
+      console.warn('[Dashboard] /api/user/sync fallback to local cache:', e);
+    }
+
     setWallet(DB.getWalletForUser(currentUser.id));
-    
     const txs = DB.getTransactions().filter(t => t.user_id === currentUser.id);
     setTransactions(txs);
-
     const plans = DB.getSavingsPlans().filter(p => p.user_id === currentUser.id);
     setSavingsPlans(plans);
-
     const accs = DB.getLinkedAccounts().filter(a => a.user_id === currentUser.id);
     setLinkedAccounts(accs);
     if (accs.length > 0) {
@@ -205,7 +280,6 @@ export default function DashboardPage() {
       if (!depositSource) setDepositSource(defaultAcc.id);
       if (!withdrawSource) setWithdrawSource(defaultAcc.id);
     }
-
     refreshNotifications();
     setFoodPackagesList(DB.getFoodPackages().filter(p => p.is_available));
     setFoodItemsList(DB.getFoodItems().filter(i => i.in_stock));
@@ -294,24 +368,9 @@ export default function DashboardPage() {
         return;
       }
 
-      // Also record in localStorage for offline display
-      DB.addTransaction({
-        user_id: currentUser.id,
-        wallet_id: wallet.id,
-        type: 'deposit',
-        amount: amountNum,
-        status: 'pending',
-        reference: data.reference || `TX-DEP-${Math.floor(1000 + Math.random() * 9000)}`,
-        category: 'income',
-        description: sourceAccount ? `Direct Deposit from ${sourceAccount.bank_name} (Pending)` : 'Direct Deposit (Pending)',
-      });
-
-      DB.addAuditLog(currentUser.id, 'Deposit Initiated (Pending Verification)', { amount: amountNum, reference: data.reference });
-      DB.addInAppNotification(currentUser.id, 'Deposit Under Review', `₦${amountNum.toFixed(2)} deposit is pending Finance verification.`, 'transaction');
-
       setDepositAmount('');
       setDepositModal(false);
-      refreshData();
+      await refreshData();
     } catch (err) {
       console.error('[Deposit] Error:', err);
       alert('Unable to reach server. Please try again.');
@@ -374,7 +433,7 @@ export default function DashboardPage() {
     }, 1200);
   };
 
-  const handleTranzactOTPSubmit = (e: React.FormEvent) => {
+  const handleTranzactOTPSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !wallet) return;
     setOtpError('');
@@ -384,36 +443,32 @@ export default function DashboardPage() {
     }
 
     setIsProcessing(true);
-    setTimeout(() => {
+    try {
       const finalAmount = parseFloat(tranzactAmount);
-      wallet.wallet_balance += finalAmount;
-      DB.saveWallet(wallet);
-
-      DB.addTransaction({
-        user_id: currentUser.id,
-        wallet_id: wallet.id,
-        type: 'etranzact_checkout',
-        amount: finalAmount,
-        status: 'completed',
-        reference: `ETZ-TX-${Math.floor(100000000 + Math.random() * 900000000)}`,
-        category: 'income',
-        description: `eTranzact Gateway Credit (${cardDetails.number ? 'Card' : 'PocketMoni'})`
+      const res = await fetch('/api/deposits/initiate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          amount: finalAmount,
+          paymentMethod: 'etranzact_gateway',
+          description: `eTranzact Gateway Credit (${cardDetails.number ? 'Card' : 'PocketMoni'})`,
+        }),
       });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setOtpError(data.error || 'Gateway payment initiation failed.');
+        setIsProcessing(false);
+        return;
+      }
 
-      logSimulation(
-        'Email',
-        'eTranzact Gateway Deposit Confirm',
-        currentUser.email,
-        `Hi ${currentUser.name},\n\nWe confirm a dynamic deposit of ₦${finalAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })} into your Affy Savings wallet via eTranzact WebConnect.\n\nAvailable Balance: ₦${wallet.wallet_balance.toLocaleString('en-US', { minimumFractionDigits: 2 })}.`
-      );
-
-      DB.addAuditLog(currentUser.id, 'eTranzact Checkout Deposit Completed', { amount: finalAmount });
-      DB.addInAppNotification(currentUser.id, 'eTranzact Wallet Credited', `+₦${finalAmount.toLocaleString()} via eTranzact checkout gateway.`, 'transaction');
-
-      setIsProcessing(false);
       setTranzactView('success');
-      refreshData();
-    }, 1000);
+      await refreshData();
+    } catch (err) {
+      console.error('[eTranzact OTP error]', err);
+      setOtpError('Failed to record payment. Please try again.');
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   const handleInitiateBankTransfer = () => {
@@ -426,27 +481,34 @@ export default function DashboardPage() {
     }, 800);
   };
 
-  const handleConfirmBankTransfer = () => {
+  const handleConfirmBankTransfer = async () => {
     if (!currentUser || !wallet || !tranzactAmount) return;
+    const finalAmount = parseFloat(tranzactAmount);
+    if (isNaN(finalAmount) || finalAmount <= 0) {
+      alert("Please enter a valid transfer amount.");
+      return;
+    }
+
     setIsProcessing(true);
-    setTimeout(() => {
-      const finalAmount = parseFloat(tranzactAmount);
-      const ref = `DEP-TRF-${Math.floor(100000 + Math.random() * 900000)}`;
-
-      // Save transaction as pending verification
-      DB.addTransaction({
-        user_id: currentUser.id,
-        wallet_id: wallet.id,
-        type: 'etranzact_checkout',
-        amount: finalAmount,
-        status: 'pending',
-        reference: ref,
-        category: 'income',
-        description: `Direct Bank Transfer (Pending Verification)`
+    try {
+      const res = await fetch('/api/deposits/initiate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          amount: finalAmount,
+          paymentMethod: 'direct_bank_transfer',
+          description: 'Direct Bank Transfer (Pending Verification)',
+        }),
       });
+      const data = await res.json();
 
-      DB.addAuditLog(currentUser.id, 'Direct Bank Transfer Deposit Initiated', { amount: finalAmount, reference: ref });
-      
+      if (!res.ok || !data.success) {
+        alert(data.error || 'Failed to initiate deposit request.');
+        setIsProcessing(false);
+        return;
+      }
+
+      const ref = data.reference;
       const directConfig = cms.directDeposit || {
         bankName: "Opay",
         accountNumber: "8103151999",
@@ -467,10 +529,14 @@ export default function DashboardPage() {
         window.open(waUrl, '_blank');
       }
 
-      setIsProcessing(false);
       setTranzactView('success');
-      refreshData();
-    }, 1000);
+      await refreshData();
+    } catch (err) {
+      console.error('[Direct Bank Transfer Error]', err);
+      alert('Unable to reach server. Please try again.');
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   // 3. WITHDRAW FUNDS — server-side API with 4-digit PIN (escrow reservation)
@@ -512,23 +578,8 @@ export default function DashboardPage() {
         return;
       }
 
-      // Mirror in localStorage for offline display
-      DB.addTransaction({
-        user_id: currentUser.id,
-        wallet_id: wallet.id,
-        type: 'withdrawal',
-        amount: amountNum,
-        status: 'pending',
-        reference: data.reference || `TX-WTH-${Math.floor(1000 + Math.random() * 9000)}`,
-        category: 'other',
-        description: `Withdrawal to ${sourceAccount.bank_name} (Pending Settlement)`,
-      });
-
-      DB.addAuditLog(currentUser.id, 'Withdrawal Requested (Pending Settlement)', { amount: amountNum, bankName: sourceAccount.bank_name });
-      DB.addInAppNotification(currentUser.id, 'Withdrawal Processing', `₦${amountNum.toFixed(2)} withdrawal to ${sourceAccount.bank_name} is pending Finance settlement.`, 'transaction');
-
       closeWithdrawModal();
-      refreshData();
+      await refreshData();
     } catch (err) {
       console.error('[Withdrawal] Error:', err);
       setWithdrawError('Unable to reach server. Please try again.');
@@ -538,7 +589,7 @@ export default function DashboardPage() {
   };
 
   // 4. CREATE SAVINGS PLAN
-  const handleCreateSavingsSubmit = (e: React.FormEvent) => {
+  const handleCreateSavingsSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser) return;
     
@@ -550,139 +601,106 @@ export default function DashboardPage() {
       return;
     }
 
-    const plan = DB.createSavingsPlan(
-      currentUser.id,
-      newSavingsData.name,
-      newSavingsData.type,
-      targetNum,
-      durationNum
-    );
-
-    DB.addAuditLog(currentUser.id, 'Created Savings Plan', { name: plan.name, type: plan.type, target: targetNum });
-    DB.addInAppNotification(currentUser.id, 'Savings Vault Initialized', `Vault "${plan.name}" created. Matures on ${new Date(plan.end_date).toLocaleDateString()}.`, 'announcement');
-
-    setNewSavingsData({ name: '', type: 'locked', targetAmount: '', durationDays: '90' });
-    setAddSavingsModal(false);
-    refreshData();
+    setIsProcessing(true);
+    try {
+      const res = await fetch('/api/savings/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: newSavingsData.type,
+          name: newSavingsData.name,
+          amount: targetNum,
+          targetAmount: targetNum,
+          durationDays: durationNum,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        alert(data.error || 'Failed to create savings plan.');
+        setIsProcessing(false);
+        return;
+      }
+      setNewSavingsData({ name: '', type: 'locked', targetAmount: '', durationDays: '90' });
+      setAddSavingsModal(false);
+      await refreshData();
+    } catch (err) {
+      console.error('[Savings Create] Error:', err);
+      alert('Unable to reach server. Please try again.');
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   // 5. TOP UP SAVINGS (Transfer from liquid wallet to savings goal)
-  const handleTopUpSubmit = (e: React.FormEvent) => {
+  const handleTopUpSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !wallet || !topUpAmount) return;
 
     const amountVal = parseFloat(topUpAmount);
     if (isNaN(amountVal) || amountVal <= 0) return;
 
-    const res = DB.depositToSavingsPlan(topUpModal.planId, amountVal);
-    if (!res.success) {
-      alert(res.error || "Deposit failed.");
-      return;
+    setIsProcessing(true);
+    try {
+      const res = await fetch('/api/savings/topup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          planId: topUpModal.planId,
+          amount: amountVal,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        alert(data.error || 'Failed to top up plan.');
+        setIsProcessing(false);
+        return;
+      }
+      setTopUpAmount('');
+      setTopUpModal({ open: false, planId: '' });
+      await refreshData();
+    } catch (err) {
+      console.error('[Savings Topup] Error:', err);
+      alert('Unable to reach server. Please try again.');
+    } finally {
+      setIsProcessing(false);
     }
-
-    const plan = res.plan!;
-    DB.addTransaction({
-      user_id: currentUser.id,
-      wallet_id: wallet.id,
-      type: 'savings_deposit',
-      amount: amountVal,
-      status: 'completed',
-      reference: `TX-SV-${Math.floor(1000 + Math.random() * 9000)}`,
-      category: 'savings',
-      description: `Funded Savings: "${plan.name}"`
-    });
-
-    logSimulation(
-      'Email',
-      'Savings Vault Funded',
-      currentUser.email,
-      `Hi ${currentUser.name},\n\nYou have transferred ₦${amountVal.toFixed(2)} from your liquid balance to savings vault "${plan.name}".\n\nVault Balance: ₦${plan.saved_amount.toFixed(2)}.`
-    );
-
-    DB.addAuditLog(currentUser.id, 'Deposited into Savings Plan', { planId: plan.id, amount: amountVal });
-    DB.addInAppNotification(currentUser.id, 'Vault Balance Updated', `₦${amountVal.toFixed(2)} transferred to ${plan.name} vault.`, 'transaction');
-
-    setTopUpAmount('');
-    setTopUpModal({ open: false, planId: '' });
-    refreshData();
   };
 
   // 6. BREAK SAVINGS PLAN
-  const handleBreakPlan = (planId: string) => {
+  const handleBreakPlan = async (planId: string) => {
     if (!currentUser || !wallet) return;
 
-    const plans = DB.getSavingsPlans();
-    const idx = plans.findIndex(p => p.id === planId);
-    if (idx === -1) return;
+    const plan = savingsPlans.find(p => p.id === planId);
+    if (!plan) return;
 
-    const plan = plans[idx];
-    const now = new Date();
-    const end = new Date(plan.end_date);
-    const isMatured = now >= end;
+    const penaltyPct = cms.savingsConfig?.earlyWithdrawalPenalty || 5.0;
+    const confirmMsg = plan.type === 'locked'
+      ? `Breaking this locked vault early incurs a ${penaltyPct}% liquidation penalty fee. Proceed?`
+      : `Withdraw full balance of "${plan.name}" to your wallet?`;
 
-    let payoutAmount = plan.saved_amount;
-    let penaltyFee = 0;
+    if (!window.confirm(confirmMsg)) return;
 
-    if (!isMatured) {
-      // Apply 5.0% early breakout fee penalty
-      const penaltyPct = cms.savingsConfig?.earlyWithdrawalPenalty || 5.0;
-      penaltyFee = plan.saved_amount * (penaltyPct / 100);
-      payoutAmount = plan.saved_amount - penaltyFee;
-    }
-
-    // Credit payout to liquid wallet
-    wallet.wallet_balance += payoutAmount;
-    DB.saveWallet(wallet);
-
-    // Delete savings plan or set status to completed/broken
-    plan.status = penaltyFee > 0 ? 'broken' : 'completed';
-    plans[idx] = plan;
-    DB.saveSavingsPlans(plans);
-
-    // Save transaction
-    DB.addTransaction({
-      user_id: currentUser.id,
-      wallet_id: wallet.id,
-      type: 'savings_withdrawal',
-      amount: payoutAmount,
-      status: 'completed',
-      reference: `TX-BRK-${Math.floor(1000 + Math.random() * 9000)}`,
-      category: 'income',
-      description: `Break Savings Plan: "${plan.name}" ${!isMatured ? '(Premature)' : ''}`
-    });
-
-    if (penaltyFee > 0) {
-      // Log penalty transaction
-      DB.addTransaction({
-        user_id: currentUser.id,
-        wallet_id: wallet.id,
-        type: 'penalty_fee',
-        amount: penaltyFee,
-        status: 'completed',
-        reference: `TX-FEE-${Math.floor(1000 + Math.random() * 9000)}`,
-        category: 'other',
-        description: `Early Breakout Penalty Fee (${cms.savingsConfig?.earlyWithdrawalPenalty || 5.0}%): "${plan.name}"`
+    setIsProcessing(true);
+    try {
+      const endpoint = plan.type === 'locked' ? '/api/savings/break' : '/api/savings/withdraw';
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ planId, penaltyPercent: penaltyPct }),
       });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        alert(data.error || 'Failed to liquidate savings plan.');
+        setIsProcessing(false);
+        return;
+      }
+      await refreshData();
+    } catch (err) {
+      console.error('[Savings Liquidate] Error:', err);
+      alert('Unable to reach server. Please try again.');
+    } finally {
+      setIsProcessing(false);
     }
-
-    logSimulation(
-      'Email',
-      'Savings Vault Terminated',
-      currentUser.email,
-      `Hi ${currentUser.name},\n\nYour savings vault "${plan.name}" has been terminated.\n\nPayout Credited: ₦${payoutAmount.toFixed(2)}${penaltyFee > 0 ? `\nPenalty Fee Deducted: ₦${penaltyFee.toFixed(2)}` : ''}.\n\nLiquid Wallet Balance: ₦${wallet.wallet_balance.toFixed(2)}.`
-    );
-    logSimulation(
-      'WhatsApp',
-      'Savings Break Alert',
-      currentUser.phone || '+234 810 315 1999',
-      `AFFY SAVINGS: Terminated "${plan.name}". Wallet credited: ₦${payoutAmount.toFixed(2)}.${penaltyFee > 0 ? ` Penalty: ₦${penaltyFee.toFixed(2)}` : ''}`
-    );
-
-    DB.addAuditLog(currentUser.id, 'Terminated Savings Goal', { planId, name: plan.name, isMatured, penaltyFee });
-    DB.addInAppNotification(currentUser.id, 'Savings Vault Closed', `Vault "${plan.name}" has been broken. Wallet credited.`, 'transaction');
-
-    setBreakPlanModal({ open: false, planId: '' });
-    refreshData();
   };
 
   // 7. FOOD RESERVE MATURITY HANDLERS

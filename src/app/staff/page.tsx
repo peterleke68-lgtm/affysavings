@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useApp } from '@/components/Providers';
 import { DB, logSimulation, StaffProfile, User, Transaction, AuditLog, SavingsPlan, FoodOrder } from '@/services/db';
+import { supabase } from '@/services/supabaseClient';
 import { 
   ArrowLeft, 
   ShieldCheck, 
@@ -166,19 +167,90 @@ export default function StaffPortal() {
     }
   };
 
+  const fetchCustomerDirectory = async () => {
+    try {
+      const res = await fetch('/api/admin/users');
+      const data = await res.json();
+      if (data.success && data.users) {
+        setCustomerList(data.users);
+      }
+    } catch (e) {
+      console.error('Failed to fetch customer directory:', e);
+    }
+  };
+
+  const fetchAllTransactions = async () => {
+    try {
+      const res = await fetch('/api/finance/transactions');
+      const data = await res.json();
+      if (data.success && data.transactions) {
+        setTransactionList(data.transactions);
+      }
+    } catch (e) {
+      console.error('Failed to fetch all transactions:', e);
+    }
+  };
+
   const refreshData = () => {
-    setCustomerList(DB.getUsers());
-    setSavingsList(DB.getSavingsPlans());
-    setTransactionList(DB.getTransactions());
-    setAuditList(DB.getAuditLogs());
-    setFoodOrders(DB.getFoodOrders());
+    fetchCustomerDirectory();
+    fetchAllTransactions();
     fetchPendingReviews();
     fetchStaffList();
+    setSavingsList(DB.getSavingsPlans());
+    setAuditList(DB.getAuditLogs());
+    setFoodOrders(DB.getFoodOrders());
   };
 
   useEffect(() => {
     if (!currentStaff) return;
     refreshData();
+
+    // 1. Supabase Realtime Subscription for instantaneous transaction reviews and customer state
+    let channel: any = null;
+    try {
+      if (supabase) {
+        channel = supabase
+          .channel('staff_portal_realtime')
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'transactions' },
+            () => {
+              fetchPendingReviews();
+              fetchAllTransactions();
+            }
+          )
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'users' },
+            () => {
+              fetchCustomerDirectory();
+            }
+          )
+          .subscribe();
+      }
+    } catch (realtimeErr) {
+      console.warn('[Staff Portal] Realtime subscription notice:', realtimeErr);
+    }
+
+    // 2. Fast auto-polling for live updates in staff portal
+    const interval = setInterval(() => {
+      fetchPendingReviews();
+      fetchAllTransactions();
+      fetchCustomerDirectory();
+    }, 4000);
+
+    const handleFocus = () => {
+      refreshData();
+    };
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      if (channel && supabase) {
+        supabase.removeChannel(channel);
+      }
+      clearInterval(interval);
+      window.removeEventListener('focus', handleFocus);
+    };
   }, [currentStaff]);
 
   if (!currentStaff) {
@@ -190,17 +262,24 @@ export default function StaffPortal() {
   }
 
   // 2. COMPLIANCE: UNLOCK LOCKED CUSTOMER PROFILE
-  const handleUnlockCustomer = (customerId: string) => {
-    const list = DB.getUsers();
-    const idx = list.findIndex(u => u.id === customerId);
-    if (idx !== -1) {
-      list[idx].is_locked = false;
-      list[idx].failed_attempts = 0;
-      DB.saveUsers(list);
-      DB.addAuditLog(currentStaff.id, 'Unlocked Locked User Profile', { customerId, customerEmail: list[idx].email });
-      setCustomerList(list);
-      setSuccessMsg(`Unlocked profile for ${list[idx].email} successfully.`);
-      setTimeout(() => setSuccessMsg(''), 3000);
+  const handleUnlockCustomer = async (customerId: string) => {
+    setErrorMsg('');
+    try {
+      const res = await fetch('/api/admin/users', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: customerId, isLocked: false }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setSuccessMsg(data.message || 'Customer profile unlocked successfully.');
+        fetchCustomerDirectory();
+        setTimeout(() => setSuccessMsg(''), 4000);
+      } else {
+        setErrorMsg(data.error || 'Failed to unlock customer profile.');
+      }
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Error communicating with server.');
     }
   };
 
@@ -645,72 +724,98 @@ export default function StaffPortal() {
               </div>
             )}
 
-            {/* 3. FINANCE METRICS: savings summaries, accrued penalty fees */}
+            {/* 3. FINANCE OPERATIONS PORTAL */}
             {(currentStaff.role === 'Super Admin' || currentStaff.role === 'Finance') && (
               <div className="space-y-8 animate-fade-in">
                 
-                {/* Aggregate totals cards */}
-                <div className="grid grid-cols-1 sm:grid-cols-4 gap-6">
-                  <div className="bg-card-bg border border-border/40 p-5 rounded-3xl shadow-sm text-center hover-lift">
-                    <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider block">Locked Strategy Pool</span>
-                    <span className="text-xl font-mono font-black mt-2 block text-red-500">₦{totalLockedSavings.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                {/* Finance Metrics Overview Cards */}
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                  {/* Total Deposits */}
+                  <div className="bg-card-bg border border-border/40 p-5 rounded-3xl shadow-sm hover-lift space-y-1">
+                    <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider block">Total Deposits</span>
+                    <strong className="text-lg font-mono font-black block text-foreground">
+                      ₦{transactionList.filter(t => t.type === 'deposit').reduce((acc, t) => acc + Number(t.amount || 0), 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                    </strong>
+                    <span className="text-[10px] font-mono text-zinc-500 block">
+                      {transactionList.filter(t => t.type === 'deposit').length} total requests
+                    </span>
                   </div>
 
-                  <div className="bg-card-bg border border-border/40 p-5 rounded-3xl shadow-sm text-center hover-lift">
-                    <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider block">Fixed Target Pool</span>
-                    <span className="text-xl font-mono font-black mt-2 block text-amber-500">₦{totalFixedSavings.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                  {/* Pending Deposits */}
+                  <div className="bg-card-bg border border-amber-500/30 p-5 rounded-3xl shadow-sm hover-lift space-y-1 bg-amber-500/5">
+                    <span className="text-[10px] text-amber-400 font-bold uppercase tracking-wider block">Pending Deposits</span>
+                    <strong className="text-lg font-mono font-black block text-amber-400">
+                      ₦{transactionList.filter(t => t.type === 'deposit' && t.status === 'pending').reduce((acc, t) => acc + Number(t.amount || 0), 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                    </strong>
+                    <span className="text-[10px] font-mono text-amber-500/80 block">
+                      {transactionList.filter(t => t.type === 'deposit' && t.status === 'pending').length} awaiting review
+                    </span>
                   </div>
 
-                  <div className="bg-card-bg border border-border/40 p-5 rounded-3xl shadow-sm text-center hover-lift">
-                    <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider block">Goal Target Pool</span>
-                    <span className="text-xl font-mono font-black mt-2 block text-primary">₦{totalTargetSavings.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                  {/* Approved Deposits */}
+                  <div className="bg-card-bg border border-emerald-500/30 p-5 rounded-3xl shadow-sm hover-lift space-y-1 bg-emerald-500/5">
+                    <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider block">Approved Deposits</span>
+                    <strong className="text-lg font-mono font-black block text-emerald-400">
+                      ₦{transactionList.filter(t => t.type === 'deposit' && t.status === 'completed').reduce((acc, t) => acc + Number(t.amount || 0), 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                    </strong>
+                    <span className="text-[10px] font-mono text-emerald-500/80 block">
+                      {transactionList.filter(t => t.type === 'deposit' && t.status === 'completed').length} credited
+                    </span>
                   </div>
 
-                  <div className="bg-card-bg border border-border/40 p-5 rounded-3xl shadow-sm text-center hover-lift">
-                    <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider block">Food Reserve Pool</span>
-                    <span className="text-xl font-mono font-black mt-2 block text-emerald-400">₦{totalFoodSavings.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
-                  </div>
-                </div>
-
-                {/* Penalty fee ledger list */}
-                <div className="bg-card-bg border border-border/40 rounded-3xl p-6 md:p-8 shadow-sm space-y-4 text-xs hover-lift">
-                  <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 pb-3 border-b border-border/30">
-                    <div className="flex items-center gap-2">
-                      <DollarSign size={16} className="text-primary animate-pulse" />
-                      <h3 className="font-bold text-sm font-display text-foreground">Accrued Penalty Auditing</h3>
-                    </div>
-                    <div className="text-left sm:text-right">
-                      <span className="text-[9px] text-zinc-400 uppercase font-bold tracking-widest block">Total Penalties Accrued</span>
-                      <strong className="text-lg text-red-500 font-mono font-black">₦{calculateTotalPenalties().toLocaleString(undefined, {minimumFractionDigits: 2})}</strong>
-                    </div>
+                  {/* Declined Deposits */}
+                  <div className="bg-card-bg border border-red-500/30 p-5 rounded-3xl shadow-sm hover-lift space-y-1 bg-red-500/5">
+                    <span className="text-[10px] text-red-400 font-bold uppercase tracking-wider block">Declined Deposits</span>
+                    <strong className="text-lg font-mono font-black block text-red-400">
+                      ₦{transactionList.filter(t => t.type === 'deposit' && t.status === 'rejected').reduce((acc, t) => acc + Number(t.amount || 0), 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                    </strong>
+                    <span className="text-[10px] font-mono text-red-500/80 block">
+                      {transactionList.filter(t => t.type === 'deposit' && t.status === 'rejected').length} rejected
+                    </span>
                   </div>
 
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse text-xs">
-                      <thead>
-                        <tr className="border-b border-border/40 text-zinc-400 font-bold uppercase tracking-widest text-[9px]">
-                          <th className="py-3 px-4">Audit Reference</th>
-                          <th className="py-3 px-4">User ID</th>
-                          <th className="py-3 px-4">Description</th>
-                          <th className="py-3 px-4 text-right">Fee Charge</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-border/30">
-                        {transactionList.filter(t => t.type === 'penalty_fee').map(tx => (
-                          <tr key={tx.id} className="hover:bg-neutral-gray/30 transition-colors">
-                            <td className="py-3.5 px-4 font-mono font-bold text-foreground">{tx.reference}</td>
-                            <td className="py-3.5 px-4 font-mono text-[9px] text-zinc-450">{tx.user_id}</td>
-                            <td className="py-3.5 px-4 text-zinc-555 font-medium">{tx.description}</td>
-                            <td className="py-3.5 px-4 text-right font-mono font-extrabold text-red-500">₦{tx.amount.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
-                          </tr>
-                        ))}
-                        {transactionList.filter(t => t.type === 'penalty_fee').length === 0 && (
-                          <tr>
-                            <td colSpan={4} className="py-8 text-center text-zinc-400 font-semibold">No penalties accrued yet.</td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
+                  {/* Total Withdrawals */}
+                  <div className="bg-card-bg border border-border/40 p-5 rounded-3xl shadow-sm hover-lift space-y-1">
+                    <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider block">Total Withdrawals</span>
+                    <strong className="text-lg font-mono font-black block text-foreground">
+                      ₦{transactionList.filter(t => t.type === 'withdrawal').reduce((acc, t) => acc + Number(t.amount || 0), 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                    </strong>
+                    <span className="text-[10px] font-mono text-zinc-500 block">
+                      {transactionList.filter(t => t.type === 'withdrawal').length} total requests
+                    </span>
+                  </div>
+
+                  {/* Pending Withdrawals */}
+                  <div className="bg-card-bg border border-amber-500/30 p-5 rounded-3xl shadow-sm hover-lift space-y-1 bg-amber-500/5">
+                    <span className="text-[10px] text-amber-400 font-bold uppercase tracking-wider block">Pending Withdrawals</span>
+                    <strong className="text-lg font-mono font-black block text-amber-400">
+                      ₦{transactionList.filter(t => t.type === 'withdrawal' && t.status === 'pending').reduce((acc, t) => acc + Number(t.amount || 0), 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                    </strong>
+                    <span className="text-[10px] font-mono text-amber-500/80 block">
+                      {transactionList.filter(t => t.type === 'withdrawal' && t.status === 'pending').length} awaiting review
+                    </span>
+                  </div>
+
+                  {/* Approved Withdrawals */}
+                  <div className="bg-card-bg border border-emerald-500/30 p-5 rounded-3xl shadow-sm hover-lift space-y-1 bg-emerald-500/5">
+                    <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider block">Approved Withdrawals</span>
+                    <strong className="text-lg font-mono font-black block text-emerald-400">
+                      ₦{transactionList.filter(t => t.type === 'withdrawal' && t.status === 'completed').reduce((acc, t) => acc + Number(t.amount || 0), 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                    </strong>
+                    <span className="text-[10px] font-mono text-emerald-500/80 block">
+                      {transactionList.filter(t => t.type === 'withdrawal' && t.status === 'completed').length} settled
+                    </span>
+                  </div>
+
+                  {/* Declined Withdrawals */}
+                  <div className="bg-card-bg border border-red-500/30 p-5 rounded-3xl shadow-sm hover-lift space-y-1 bg-red-500/5">
+                    <span className="text-[10px] text-red-400 font-bold uppercase tracking-wider block">Declined Withdrawals</span>
+                    <strong className="text-lg font-mono font-black block text-red-400">
+                      ₦{transactionList.filter(t => t.type === 'withdrawal' && t.status === 'rejected').reduce((acc, t) => acc + Number(t.amount || 0), 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                    </strong>
+                    <span className="text-[10px] font-mono text-red-500/80 block">
+                      {transactionList.filter(t => t.type === 'withdrawal' && t.status === 'rejected').length} refunded
+                    </span>
                   </div>
                 </div>
 
@@ -720,8 +825,8 @@ export default function StaffPortal() {
                     <div className="flex items-center gap-2">
                       <ShieldCheck size={16} className="text-emerald-500 animate-pulse" />
                       <div>
-                        <h3 className="font-bold text-sm font-display text-foreground">Pending Transaction Approvals</h3>
-                        <p className="text-[10px] text-zinc-400">Authoritative database review queue for deposits & withdrawals</p>
+                        <h3 className="font-bold text-sm font-display text-foreground">Pending Finance Approvals Queue</h3>
+                        <p className="text-[10px] text-zinc-400">Authoritative database review queue for deposits and withdrawals</p>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
@@ -773,11 +878,16 @@ export default function StaffPortal() {
                             </td>
                             <td className="py-3.5 px-4">
                               <span className="font-bold text-foreground block">
-                                {tx.users?.name || tx.user_id}
+                                {tx.user?.name || tx.users?.name || tx.recipient_name || 'Customer'}
                               </span>
-                              <span className="text-[10px] text-zinc-400 font-mono">
-                                {tx.users?.email || ''}
+                              <span className="text-[10px] text-zinc-400 font-mono block">
+                                {tx.user?.email || tx.users?.email || tx.recipient_email || ''}
                               </span>
+                              {(tx.user?.phone || tx.users?.phone) && (
+                                <span className="text-[9px] text-zinc-500 font-mono block">
+                                  {tx.user?.phone || tx.users?.phone}
+                                </span>
+                              )}
                             </td>
                             <td className="py-3.5 px-4 font-mono font-extrabold text-foreground text-sm">
                               ₦{Number(tx.amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}
@@ -811,7 +921,7 @@ export default function StaffPortal() {
                                 disabled={reviewActionLoading === tx.id}
                                 className="px-3 py-1.5 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 font-bold text-[10px] transition-all cursor-pointer disabled:opacity-50 inline-flex items-center gap-1"
                               >
-                                Reject
+                                Decline
                               </button>
                             </td>
                           </tr>
@@ -835,39 +945,201 @@ export default function StaffPortal() {
                   </div>
                 </div>
 
+                {/* Transaction History Table */}
+                <div className="bg-card-bg border border-border/40 rounded-3xl p-6 md:p-8 shadow-sm space-y-4 text-xs hover-lift">
+                  <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 pb-3 border-b border-border/30">
+                    <div className="flex items-center gap-2">
+                      <FileText size={16} className="text-primary" />
+                      <div>
+                        <h3 className="font-bold text-sm font-display text-foreground">Transaction History Ledger</h3>
+                        <p className="text-[10px] text-zinc-400">Database source of truth for all deposits, withdrawals, and vault activities</p>
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-mono text-zinc-400">
+                      Total: {transactionList.length} transactions
+                    </span>
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead>
+                        <tr className="border-b border-border/40 text-zinc-400 font-bold uppercase tracking-widest text-[9px]">
+                          <th className="py-3 px-4">Ref / Date</th>
+                          <th className="py-3 px-4">Type</th>
+                          <th className="py-3 px-4">Customer</th>
+                          <th className="py-3 px-4">Amount</th>
+                          <th className="py-3 px-4">Description</th>
+                          <th className="py-3 px-4 text-right">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border/30">
+                        {transactionList.slice(0, 30).map((tx: any) => (
+                          <tr key={tx.id} className="hover:bg-neutral-gray/30 transition-colors">
+                            <td className="py-3.5 px-4 font-mono">
+                              <span className="font-bold text-foreground block">{tx.reference}</span>
+                              <span className="text-[9px] text-zinc-500">{new Date(tx.created_at).toLocaleString()}</span>
+                            </td>
+                            <td className="py-3.5 px-4 font-bold text-[10px] uppercase">
+                              <span className={`px-2 py-0.5 rounded-full text-[9px] font-mono ${
+                                tx.type === 'deposit' ? 'bg-emerald-500/10 text-emerald-400' :
+                                tx.type === 'withdrawal' ? 'bg-blue-500/10 text-blue-400' :
+                                tx.type === 'penalty_fee' ? 'bg-red-500/10 text-red-400' :
+                                'bg-purple-500/10 text-purple-400'
+                              }`}>
+                                {tx.type}
+                              </span>
+                            </td>
+                            <td className="py-3.5 px-4">
+                              <span className="font-bold text-foreground block">{tx.user?.name || tx.users?.name || tx.recipient_name || tx.user_id}</span>
+                              <span className="text-[9px] text-zinc-500 font-mono">{tx.user?.email || tx.users?.email || ''}</span>
+                            </td>
+                            <td className="py-3.5 px-4 font-mono font-bold text-foreground">
+                              ₦{Number(tx.amount).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                            </td>
+                            <td className="py-3.5 px-4 text-zinc-400 text-[10px] max-w-xs truncate">
+                              {tx.description}
+                              {tx.rejection_reason && (
+                                <span className="block text-[9px] text-red-400 italic">Reason: {tx.rejection_reason}</span>
+                              )}
+                            </td>
+                            <td className="py-3.5 px-4 text-right">
+                              <span className={`px-2.5 py-1 rounded-full text-[9px] font-bold uppercase font-mono ${
+                                tx.status === 'completed' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
+                                tx.status === 'rejected' ? 'bg-red-500/10 text-red-400 border border-red-500/20' :
+                                'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                              }`}>
+                                {tx.status === 'completed' ? 'Approved' : tx.status === 'rejected' ? 'Declined' : 'Pending'}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                        {transactionList.length === 0 && (
+                          <tr>
+                            <td colSpan={6} className="py-8 text-center text-zinc-400">No transactions recorded in database yet.</td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
               </div>
             )}
 
-            {/* 4. CUSTOMER SUPPORT */}
+            {/* 4. CUSTOMER SUPPORT PORTAL */}
             {currentStaff.role === 'Customer Support' && (
-              <div className="bg-card-bg border border-border/40 rounded-3xl p-6 shadow-sm space-y-4 text-xs hover-lift animate-fade-in">
-                <div className="flex items-center gap-2 pb-3 border-b border-border/30">
-                  <Users size={16} className="text-primary" />
-                  <h3 className="font-bold text-sm font-display text-foreground">Customer Vault Inquiries</h3>
+              <div className="space-y-8 animate-fade-in">
+                
+                {/* Customer Support Statistics */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+                  <div className="bg-card-bg border border-border/40 p-6 rounded-3xl shadow-sm text-center hover-lift space-y-1">
+                    <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider block">Total Customers</span>
+                    <strong className="text-2xl font-mono font-black text-foreground block">{customerList.length}</strong>
+                    <span className="text-[10px] text-zinc-500">Registered platform users</span>
+                  </div>
+
+                  <div className="bg-card-bg border border-emerald-500/30 p-6 rounded-3xl shadow-sm text-center hover-lift space-y-1 bg-emerald-500/5">
+                    <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider block">Active Customers</span>
+                    <strong className="text-2xl font-mono font-black text-emerald-400 block">{customerList.filter(c => !c.is_locked).length}</strong>
+                    <span className="text-[10px] text-emerald-500/80">Operational accounts</span>
+                  </div>
+
+                  <div className="bg-card-bg border border-primary/30 p-6 rounded-3xl shadow-sm text-center hover-lift space-y-1 bg-primary/5">
+                    <span className="text-[10px] text-primary font-bold uppercase tracking-wider block">Verified Customers</span>
+                    <strong className="text-2xl font-mono font-black text-primary block">{customerList.filter(c => c.is_verified).length}</strong>
+                    <span className="text-[10px] text-primary/80">2FA / OTP verified</span>
+                  </div>
                 </div>
 
-                <div className="space-y-4">
-                  {customerList.map(cust => {
-                    const plans = savingsList.filter(p => p.user_id === cust.id);
-                    return (
-                      <div key={cust.id} className="p-4 bg-neutral-gray/50 border border-border/40 rounded-2xl space-y-3">
-                        <div className="flex justify-between font-bold text-sm">
-                          <span className="text-foreground">{cust.name}</span>
-                          <span className="text-zinc-450 text-[10px] font-mono">{cust.email}</span>
-                        </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-3 border-t border-border/20">
-                          {plans.map(p => (
-                            <div key={p.id} className="p-3 bg-card-bg border border-border/30 rounded-xl">
-                              <span className="font-bold block truncate text-foreground">{p.name}</span>
-                              <span className="text-primary font-mono font-extrabold block mt-1.5">₦{p.saved_amount.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
-                            </div>
-                          ))}
-                          {plans.length === 0 && <span className="text-[10px] text-zinc-400 italic">No savings plans created.</span>}
-                        </div>
+                {/* Customer Directory Table */}
+                <div className="bg-card-bg border border-border/40 rounded-3xl p-6 md:p-8 shadow-sm space-y-4 text-xs hover-lift">
+                  <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 pb-3 border-b border-border/30">
+                    <div className="flex items-center gap-2">
+                      <Users size={16} className="text-primary" />
+                      <div>
+                        <h3 className="font-bold text-sm font-display text-foreground">Registered Customer Directory</h3>
+                        <p className="text-[10px] text-zinc-400">Confidential customer lookup & support management (Passwords/PINs secured)</p>
                       </div>
-                    );
-                  })}
+                    </div>
+                    <div className="relative">
+                      <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
+                      <input
+                        type="text"
+                        placeholder="Search customers..."
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        className="pl-8 pr-3 py-1.5 rounded-xl bg-input-bg border border-border/60 text-xs focus:border-primary focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead>
+                        <tr className="border-b border-border/40 text-zinc-400 font-bold uppercase tracking-widest text-[9px]">
+                          <th className="py-3 px-4">Customer</th>
+                          <th className="py-3 px-4">Contact / WhatsApp</th>
+                          <th className="py-3 px-4">Wallet Balance</th>
+                          <th className="py-3 px-4">Savings Plans</th>
+                          <th className="py-3 px-4">Joined</th>
+                          <th className="py-3 px-4">Status</th>
+                          <th className="py-3 px-4 text-right">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border/30">
+                        {customerList
+                          .filter(c => 
+                            c.name?.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                            c.email?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                            (c.phone && c.phone.includes(searchQuery))
+                          )
+                          .map((cust: any) => (
+                            <tr key={cust.id} className="hover:bg-neutral-gray/30 transition-colors">
+                              <td className="py-3.5 px-4">
+                                <strong className="text-foreground block">{cust.name}</strong>
+                                <span className="text-[10px] text-zinc-400 font-mono">{cust.email}</span>
+                              </td>
+                              <td className="py-3.5 px-4 font-mono text-zinc-300">
+                                {cust.phone || 'Not provided'}
+                              </td>
+                              <td className="py-3.5 px-4 font-mono font-bold text-foreground">
+                                ₦{Number(cust.wallet?.wallet_balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                              </td>
+                              <td className="py-3.5 px-4 font-mono text-primary font-bold">
+                                {cust.savings_plans?.length || 0} active
+                              </td>
+                              <td className="py-3.5 px-4 font-mono text-[10px] text-zinc-400">
+                                {new Date(cust.created_at).toLocaleDateString()}
+                              </td>
+                              <td className="py-3.5 px-4">
+                                <span className={`px-2.5 py-0.5 rounded-full text-[9px] font-bold uppercase font-mono ${cust.is_locked ? 'bg-red-500/10 text-red-400 border border-red-500/20' : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'}`}>
+                                  {cust.is_locked ? 'Locked' : 'Active'}
+                                </span>
+                              </td>
+                              <td className="py-3.5 px-4 text-right">
+                                {cust.is_locked ? (
+                                  <button
+                                    onClick={() => handleUnlockCustomer(cust.id)}
+                                    className="px-3 py-1 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg text-[10px] font-bold cursor-pointer transition-colors"
+                                  >
+                                    Unlock Profile
+                                  </button>
+                                ) : (
+                                  <span className="text-[10px] text-zinc-500 font-mono">Normal</span>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        {customerList.length === 0 && (
+                          <tr>
+                            <td colSpan={7} className="py-8 text-center text-zinc-400">No registered customers found in database.</td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
+
               </div>
             )}
 

@@ -12,7 +12,7 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const type = searchParams.get('type');
     const status = searchParams.get('status');
-    const limit = parseInt(searchParams.get('limit') || '100', 10);
+    const limit = parseInt(searchParams.get('limit') || '200', 10);
 
     const supabase = getSupabaseAdminClient();
     if (!supabase) {
@@ -21,7 +21,7 @@ export async function GET(request: NextRequest) {
 
     let query = supabase
       .from('transactions')
-      .select('*, users:user_id(name, email, phone)')
+      .select('*')
       .order('created_at', { ascending: false })
       .limit(limit);
 
@@ -32,16 +32,49 @@ export async function GET(request: NextRequest) {
       query = query.eq('status', status);
     }
 
-    const { data: transactions, error } = await query;
+    const { data: rawTransactions, error } = await query;
 
     if (error) {
       console.error('[Finance API] transactions error:', error);
       return NextResponse.json({ success: false, error: 'Failed to fetch transactions.' }, { status: 500 });
     }
 
+    const transactions = rawTransactions || [];
+
+    // Collect all unique user IDs to attach user details
+    const userIds = Array.from(new Set(transactions.map((t: any) => t.user_id).filter(Boolean)));
+    
+    let userMap: Record<string, { id: string; name: string; email: string; phone: string }> = {};
+    if (userIds.length > 0) {
+      const { data: usersData, error: uErr } = await supabase
+        .from('users')
+        .select('id, name, email, phone')
+        .in('id', userIds);
+
+      if (!uErr && usersData) {
+        usersData.forEach((u: any) => {
+          userMap[u.id] = u;
+        });
+      }
+    }
+
+    const enrichedTransactions = transactions.map((t: any) => {
+      const userInfo = userMap[t.user_id] || {
+        id: t.user_id,
+        name: t.recipient_name || 'Customer',
+        email: t.recipient_email || 'customer@affysavings.com',
+        phone: '',
+      };
+      return {
+        ...t,
+        user: userInfo,
+        users: userInfo, // For backwards compatibility
+      };
+    });
+
     return NextResponse.json({
       success: true,
-      transactions: transactions || [],
+      transactions: enrichedTransactions,
     });
   } catch (err: unknown) {
     console.error('[Finance API] error:', err);

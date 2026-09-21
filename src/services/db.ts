@@ -84,7 +84,7 @@ export interface Transaction {
   wallet_id: string;
   type: 'deposit' | 'withdrawal' | 'transfer_sent' | 'transfer_received' | 'savings_deposit' | 'savings_withdrawal' | 'etranzact_checkout' | 'penalty_fee';
   amount: number;
-  status: 'pending' | 'completed' | 'failed';
+  status: 'pending' | 'completed' | 'failed' | 'rejected' | 'cancelled';
   recipient_email?: string;
   recipient_name?: string;
   reference: string;

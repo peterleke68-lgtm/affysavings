@@ -5,7 +5,6 @@ import {
   updateUserLockStatus,
   createAuditLog,
 } from '@/lib/supabase-server';
-import { sanitizeUser } from '@/lib/credentials';
 
 export async function GET(request: NextRequest) {
   try {
@@ -31,16 +30,54 @@ export async function GET(request: NextRequest) {
       query = query.or(`name.ilike.%${search}%,email.ilike.%${search}%,phone.ilike.%${search}%`);
     }
 
-    const { data: users, error } = await query;
+    const { data: rawUsers, error } = await query;
 
     if (error) {
       console.error('[Admin Users API] Error:', error);
       return NextResponse.json({ success: false, error: 'Failed to fetch user directory.' }, { status: 500 });
     }
 
+    const users = rawUsers || [];
+    const userIds = users.map((u: any) => u.id);
+
+    // Fetch wallets and savings plans for enriched customer support view
+    let walletMap: Record<string, any> = {};
+    let savingsMap: Record<string, any[]> = {};
+    let txCountMap: Record<string, number> = {};
+
+    if (userIds.length > 0) {
+      const [{ data: wallets }, { data: plans }, { data: txs }] = await Promise.all([
+        supabase.from('wallets').select('user_id, balance, wallet_balance, reserved_balance').in('user_id', userIds),
+        supabase.from('savings_plans').select('id, user_id, name, type, saved_amount, target_amount, status').in('user_id', userIds),
+        supabase.from('transactions').select('id, user_id').in('user_id', userIds),
+      ]);
+
+      if (wallets) {
+        wallets.forEach((w: any) => { walletMap[w.user_id] = w; });
+      }
+      if (plans) {
+        plans.forEach((p: any) => {
+          if (!savingsMap[p.user_id]) savingsMap[p.user_id] = [];
+          savingsMap[p.user_id].push(p);
+        });
+      }
+      if (txs) {
+        txs.forEach((t: any) => {
+          txCountMap[t.user_id] = (txCountMap[t.user_id] || 0) + 1;
+        });
+      }
+    }
+
+    const enrichedUsers = users.map((u: any) => ({
+      ...u,
+      wallet: walletMap[u.id] || { balance: 0, wallet_balance: 0, reserved_balance: 0 },
+      savings_plans: savingsMap[u.id] || [],
+      total_transactions: txCountMap[u.id] || 0,
+    }));
+
     return NextResponse.json({
       success: true,
-      users: users || [],
+      users: enrichedUsers,
     });
   } catch (err: unknown) {
     console.error('[Admin Users API] Error:', err);

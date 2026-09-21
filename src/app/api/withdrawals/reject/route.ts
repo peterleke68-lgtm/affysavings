@@ -14,16 +14,17 @@ export async function POST(request: NextRequest) {
 
     const { session } = authCheck;
     const body = await request.json();
-    const { transactionId, rejectionReason } = body as {
+    const { transactionId, rejectionReason, reason: legacyReason } = body as {
       transactionId?: string;
       rejectionReason?: string;
+      reason?: string;
     };
 
     if (!transactionId) {
       return NextResponse.json({ success: false, error: 'Transaction ID is required.' }, { status: 400 });
     }
 
-    const reason = (rejectionReason || 'Withdrawal rejected by Finance compliance').trim();
+    const reason = (rejectionReason || legacyReason || 'Withdrawal rejected by Finance compliance').trim();
 
     const supabase = getSupabaseAdminClient();
     if (!supabase) {
@@ -70,10 +71,8 @@ export async function POST(request: NextRequest) {
       await supabase
         .from('transactions')
         .update({
-          status: 'rejected',
-          approved_by: session.userId,
-          approved_at: new Date().toISOString(),
-          rejection_reason: reason,
+          status: 'failed',
+          description: `${tx.description || 'Withdrawal'} (Declined: ${reason})`,
         })
         .eq('id', tx.id);
 

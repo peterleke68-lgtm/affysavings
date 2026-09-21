@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useApp } from '@/components/Providers';
 import { DB, User, Transaction, AuditLog, SavingsPlan, logSimulation, FoodPackage, FoodItem, FoodOrder } from '@/services/db';
+import { supabase } from '@/services/supabaseClient';
 import { 
   ArrowLeft, 
   Settings, 
@@ -37,7 +38,8 @@ import {
   Shield,
   UserCheck,
   UserX,
-  UserPlus
+  UserPlus,
+  ShieldCheck
 } from 'lucide-react';
 import Link from 'next/link';
 import AffyLogo from '@/components/AffyLogo';
@@ -54,6 +56,7 @@ export default function AdminPortal() {
   }, [currentStaff, router]);
 
   const [activeSubTab, setActiveSubTab] = useState<'cms' | 'staff' | 'users' | 'portfolios' | 'audit' | 'transactions' | 'food_reserve'>('cms');
+  const [viewingAsRole, setViewingAsRole] = useState<'Super Admin' | 'Finance' | 'Customer Support'>('Super Admin');
 
   // Staff management state
   const [staffList, setStaffList] = useState<any[]>([]);
@@ -118,9 +121,60 @@ export default function AdminPortal() {
       setCmsForm(JSON.parse(JSON.stringify(cms)));
     }
     refreshLists();
+
+    // 1. Supabase Realtime Subscription
+    let channel: any = null;
+    try {
+      if (supabase) {
+        channel = supabase
+          .channel('super_admin_realtime')
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'transactions' },
+            () => {
+              refreshLists();
+            }
+          )
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'users' },
+            () => {
+              refreshLists();
+            }
+          )
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'staff_profiles' },
+            () => {
+              fetchStaffList();
+            }
+          )
+          .subscribe();
+      }
+    } catch (realtimeErr) {
+      console.warn('[Admin Portal] Realtime subscription notice:', realtimeErr);
+    }
+
+    // 2. Fast background sync
+    const interval = setInterval(() => {
+      refreshLists();
+    }, 4000);
+
+    const handleFocus = () => {
+      refreshLists();
+    };
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      if (channel && supabase) {
+        supabase.removeChannel(channel);
+      }
+      clearInterval(interval);
+      window.removeEventListener('focus', handleFocus);
+    };
   }, [cms]);
 
-  const refreshLists = () => {
+  const refreshLists = async () => {
     setUsers(DB.getUsers());
     setTransactions(DB.getTransactions());
     setSavingsPlans(DB.getSavingsPlans());
@@ -129,6 +183,26 @@ export default function AdminPortal() {
     setFoodItems(DB.getFoodItems());
     setFoodOrders(DB.getFoodOrders());
     fetchStaffList();
+
+    try {
+      const uRes = await fetch('/api/admin/users');
+      const uData = await uRes.json();
+      if (uData.success && uData.users && uData.users.length > 0) {
+        setUsers(uData.users);
+      }
+    } catch (err) {
+      console.warn('Failed to fetch live admin users:', err);
+    }
+
+    try {
+      const tRes = await fetch('/api/finance/transactions');
+      const tData = await tRes.json();
+      if (tData.success && tData.transactions) {
+        setTransactions(tData.transactions);
+      }
+    } catch (err) {
+      console.warn('Failed to fetch live admin transactions:', err);
+    }
   };
 
   const fetchStaffList = async () => {
@@ -342,89 +416,120 @@ export default function AdminPortal() {
     }
   };
 
-  const handleApproveTransfer = (txId: string) => {
+  const handleApproveDeposit = async (txId: string) => {
     if (!currentStaff) return;
-    const allTx = DB.getTransactions();
-    const txIdx = allTx.findIndex(t => t.id === txId);
-    if (txIdx === -1) return;
-
-    const tx = allTx[txIdx];
-    if (tx.status !== 'pending') return;
-
-    // Get user wallet and credit it
-    const wallet = DB.getWalletForUser(tx.user_id);
-    wallet.wallet_balance += tx.amount;
-    DB.saveWallet(wallet);
-
-    // Mark transaction completed
-    tx.status = 'completed';
-    allTx[txIdx] = tx;
-    DB.saveTransactions(allTx);
-
-    // Log Audit
-    DB.addAuditLog(currentStaff.id, 'Operator Approved Pending Deposit Transfer', { txId, amount: tx.amount, customerId: tx.user_id });
-
-    // User alert notifications
-    const user = DB.getUsers().find(u => u.id === tx.user_id);
-    if (user) {
-      logSimulation(
-        'Email',
-        'Direct Transfer Deposit Approved',
-        user.email,
-        `Hi ${user.name},\n\nYour bank transfer of ₦${tx.amount.toLocaleString()} has been verified and approved.\n\nYour wallet balance has been credited. Reference: ${tx.reference}.`
-      );
-      logSimulation(
-        'WhatsApp',
-        'Direct Deposit Approved',
-        user.phone || '+234 810 315 1999',
-        `AFFY SAVINGS: Direct deposit of ₦${tx.amount.toLocaleString()} is verified & credited! Ref: ${tx.reference}.`
-      );
-      DB.addInAppNotification(user.id, 'Direct Deposit Verified', `Your transfer of ₦${tx.amount.toLocaleString()} was approved and credited.`, 'transaction');
+    try {
+      const res = await fetch('/api/deposits/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transactionId: txId }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setSuccessMsg(data.message || `Deposit approved and credited.`);
+        refreshLists();
+        setTimeout(() => setSuccessMsg(''), 3000);
+        return;
+      }
+      setStaffError(data.error || 'Transaction cannot be approved in its current state.');
+      setTimeout(() => setStaffError(''), 5000);
+    } catch (err: any) {
+      setStaffError(err.message || 'Error communicating with server.');
+      setTimeout(() => setStaffError(''), 5000);
     }
-
-    setSuccessMsg(`Approved and credited ₦${tx.amount.toLocaleString()} transfer.`);
-    refreshLists();
-    setTimeout(() => setSuccessMsg(''), 3000);
   };
 
-  const handleRejectTransfer = (txId: string) => {
+  const handleRejectDeposit = async (txId: string) => {
     if (!currentStaff) return;
-    const allTx = DB.getTransactions();
-    const txIdx = allTx.findIndex(t => t.id === txId);
-    if (txIdx === -1) return;
-
-    const tx = allTx[txIdx];
-    if (tx.status !== 'pending') return;
-
-    // Mark transaction failed
-    tx.status = 'failed';
-    allTx[txIdx] = tx;
-    DB.saveTransactions(allTx);
-
-    // Log Audit
-    DB.addAuditLog(currentStaff.id, 'Operator Rejected Pending Deposit Transfer', { txId, amount: tx.amount, customerId: tx.user_id });
-
-    // User alert notifications
-    const user = DB.getUsers().find(u => u.id === tx.user_id);
-    if (user) {
-      logSimulation(
-        'Email',
-        'Direct Transfer Deposit Declined',
-        user.email,
-        `Hi ${user.name},\n\nYour bank transfer deposit of ₦${tx.amount.toLocaleString()} was declined by administration.\n\nIf you believe this is an error, please reach out to WhatsApp Support.`
-      );
-      logSimulation(
-        'WhatsApp',
-        'Direct Deposit Declined',
-        user.phone || '+234 810 315 1999',
-        `AFFY SAVINGS: Direct transfer deposit of ₦${tx.amount.toLocaleString()} was declined. Please check email details.`
-      );
-      DB.addInAppNotification(user.id, 'Deposit Transfer Declined', `Your transfer request of ₦${tx.amount.toLocaleString()} was declined.`, 'transaction');
+    const reason = window.prompt('Enter reason for declining deposit:') || 'Declined by administration.';
+    try {
+      const res = await fetch('/api/deposits/reject', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transactionId: txId, reason }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setSuccessMsg(data.message || 'Deposit declined.');
+        refreshLists();
+        setTimeout(() => setSuccessMsg(''), 3000);
+        return;
+      }
+      setStaffError(data.error || 'Transaction cannot be rejected in its current state.');
+      setTimeout(() => setStaffError(''), 5000);
+    } catch (err: any) {
+      setStaffError(err.message || 'Error communicating with server.');
+      setTimeout(() => setStaffError(''), 5000);
     }
+  };
 
-    setSuccessMsg(`Transfer request rejected.`);
-    refreshLists();
-    setTimeout(() => setSuccessMsg(''), 3000);
+  const handleApproveWithdrawal = async (txId: string) => {
+    if (!currentStaff) return;
+    try {
+      const res = await fetch('/api/withdrawals/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transactionId: txId }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setSuccessMsg(data.message || 'Withdrawal approved and settled.');
+        refreshLists();
+        setTimeout(() => setSuccessMsg(''), 3000);
+        return;
+      }
+      setStaffError(data.error || 'Withdrawal cannot be approved in its current state.');
+      setTimeout(() => setStaffError(''), 5000);
+    } catch (err: any) {
+      setStaffError(err.message || 'Error communicating with server.');
+      setTimeout(() => setStaffError(''), 5000);
+    }
+  };
+
+  const handleRejectWithdrawal = async (txId: string) => {
+    if (!currentStaff) return;
+    const reason = window.prompt('Enter reason for declining withdrawal:') || 'Declined by administration.';
+    try {
+      const res = await fetch('/api/withdrawals/reject', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transactionId: txId, reason }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setSuccessMsg(data.message || 'Withdrawal declined and escrow refunded.');
+        refreshLists();
+        setTimeout(() => setSuccessMsg(''), 3000);
+        return;
+      }
+      setStaffError(data.error || 'Withdrawal cannot be declined in its current state.');
+      setTimeout(() => setStaffError(''), 5000);
+    } catch (err: any) {
+      setStaffError(err.message || 'Error communicating with server.');
+      setTimeout(() => setStaffError(''), 5000);
+    }
+  };
+
+  const handleUnlockCustomer = async (userId: string) => {
+    try {
+      const res = await fetch('/api/admin/users', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, isLocked: false }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setSuccessMsg(data.message || 'Customer profile unlocked.');
+        refreshLists();
+        setTimeout(() => setSuccessMsg(''), 3000);
+      } else {
+        setStaffError(data.error || 'Failed to unlock user.');
+        setTimeout(() => setStaffError(''), 5000);
+      }
+    } catch (err: any) {
+      setStaffError(err.message || 'Failed to communicate with server.');
+      setTimeout(() => setStaffError(''), 5000);
+    }
   };
 
   // FOOD RESERVE MANAGEMENT HANDLERS
@@ -631,6 +736,19 @@ export default function AdminPortal() {
               <span className="w-2 h-2 rounded-full bg-purple-500 animate-pulse" />
               <span className="text-[10px] font-mono font-bold tracking-wider text-foreground">AFFY SAVINGS SUPER ADMIN PANEL</span>
             </div>
+            <div className="flex items-center gap-1.5 bg-card-bg/50 border border-border/30 rounded-xl px-3 py-1.5">
+              <Eye size={12} className="text-zinc-400" />
+              <span className="text-[10px] text-zinc-400 font-bold">Viewing as:</span>
+              <select
+                value={viewingAsRole}
+                onChange={(e) => setViewingAsRole(e.target.value as any)}
+                className="bg-transparent text-[10px] font-bold text-primary border-none focus:outline-none cursor-pointer font-mono"
+              >
+                <option value="Super Admin">Super Admin</option>
+                <option value="Finance">Finance</option>
+                <option value="Customer Support">Customer Support</option>
+              </select>
+            </div>
             <button 
               onClick={() => {
                 setStaffError('');
@@ -655,70 +773,30 @@ export default function AdminPortal() {
       {/* CORE ADMIN NAVIGATION TAB */}
       <main className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full z-10">
         
-        {/* Navigation Tabs */}
-        <div className="flex border-b border-border/40 mb-8 overflow-x-auto gap-6 text-sm font-semibold select-none">
-          <button 
-            onClick={() => setActiveSubTab('cms')}
-            className={`pb-3.5 border-b-2 px-1 transition-colors cursor-pointer font-display ${activeSubTab === 'cms' ? 'border-primary text-primary' : 'border-transparent text-zinc-400 hover:text-foreground'}`}
-          >
-            System Branding & Rules
-          </button>
-          <button 
-            onClick={() => {
-              setActiveSubTab('staff');
-              fetchStaffList();
-            }}
-            className={`pb-3.5 border-b-2 px-1 transition-colors cursor-pointer font-display flex items-center gap-1.5 ${activeSubTab === 'staff' ? 'border-primary text-primary' : 'border-transparent text-zinc-400 hover:text-foreground'}`}
-          >
-            <Shield size={14} />
-            <span>Staff Management</span>
-            <span className="bg-primary/20 text-primary text-[10px] font-bold px-1.5 py-0.5 rounded-full font-mono">
-              {staffList.length}
-            </span>
-          </button>
-          <button 
-            onClick={() => {
-              setActiveSubTab('transactions');
-              refreshLists();
-            }}
-            className={`pb-3.5 border-b-2 px-1 transition-colors cursor-pointer font-display ${activeSubTab === 'transactions' ? 'border-primary text-primary' : 'border-transparent text-zinc-400 hover:text-foreground'}`}
-          >
-            Pending Deposits
-          </button>
-          <button 
-            onClick={() => setActiveSubTab('users')}
-            className={`pb-3.5 border-b-2 px-1 transition-colors cursor-pointer font-display ${activeSubTab === 'users' ? 'border-primary text-primary' : 'border-transparent text-zinc-400 hover:text-foreground'}`}
-          >
-            Customer Accounts
-          </button>
-          <button 
-            onClick={() => setActiveSubTab('portfolios')}
-            className={`pb-3.5 border-b-2 px-1 transition-colors cursor-pointer font-display ${activeSubTab === 'portfolios' ? 'border-primary text-primary' : 'border-transparent text-zinc-400 hover:text-foreground'}`}
-          >
-            Active Savings Plans
-          </button>
-          <button 
-            onClick={() => setActiveSubTab('audit')}
-            className={`pb-3.5 border-b-2 px-1 transition-colors cursor-pointer font-display ${activeSubTab === 'audit' ? 'border-primary text-primary' : 'border-transparent text-zinc-400 hover:text-foreground'}`}
-          >
-            Compliance Audits
-          </button>
-          <button 
-            onClick={() => {
-              setActiveSubTab('food_reserve');
-              refreshLists();
-            }}
-            className={`pb-3.5 border-b-2 px-1 transition-colors cursor-pointer font-display flex items-center gap-1.5 ${activeSubTab === 'food_reserve' ? 'border-primary text-primary' : 'border-transparent text-zinc-400 hover:text-foreground'}`}
-          >
-            <ShoppingBag size={14} />
-            <span>Food Reserve & Orders</span>
-            {foodOrders.filter(o => o.status === 'pending').length > 0 && (
-              <span className="bg-emerald-500/20 text-emerald-400 text-[10px] font-bold px-1.5 py-0.5 rounded-full font-mono">
-                {foodOrders.filter(o => o.status === 'pending').length}
+        {/* VIEWING AS ROLE WORKSPACE BANNER */}
+        {viewingAsRole !== 'Super Admin' && (
+          <div className={`p-4 rounded-2xl mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs border animate-fade-in ${
+            viewingAsRole === 'Finance' 
+              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+              : 'bg-primary/10 border-primary/30 text-primary'
+          }`}>
+            <div className="flex items-center gap-2">
+              <Eye size={16} className="shrink-0" />
+              <span>
+                <strong>Viewing Workspace as: {viewingAsRole}</strong> — You are viewing the live {viewingAsRole} workspace. Your Super Admin administrative permissions remain active in the backend.
               </span>
-            )}
-          </button>
-        </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setViewingAsRole('Super Admin')}
+              className={`px-3.5 py-1.5 rounded-xl text-[10px] font-bold text-white transition-all cursor-pointer self-start sm:self-auto ${
+                viewingAsRole === 'Finance' ? 'bg-emerald-500 hover:bg-emerald-600' : 'bg-primary hover:bg-primary-hover'
+              }`}
+            >
+              Reset to Super Admin View
+            </button>
+          </div>
+        )}
 
         {/* Global Success Banner */}
         {successMsg && (
@@ -726,6 +804,452 @@ export default function AdminPortal() {
             <CheckCircle2 size={16} className="text-emerald-500" />
             <span>{successMsg}</span>
           </div>
+        )}
+
+        {/* VIEW 1: FINANCE WORKSPACE VIEW */}
+        {viewingAsRole === 'Finance' && (
+          <div className="space-y-8 animate-fade-in">
+            {/* Finance Metrics Overview Cards */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="bg-card-bg border border-border/40 p-5 rounded-3xl shadow-sm hover-lift space-y-1">
+                <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider block">Total Deposits</span>
+                <strong className="text-lg font-mono font-black block text-foreground">
+                  ₦{transactions.filter(t => t.type === 'deposit').reduce((acc, t) => acc + Number(t.amount || 0), 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                </strong>
+                <span className="text-[10px] font-mono text-zinc-500 block">
+                  {transactions.filter(t => t.type === 'deposit').length} total requests
+                </span>
+              </div>
+              <div className="bg-card-bg border border-amber-500/30 p-5 rounded-3xl shadow-sm hover-lift space-y-1 bg-amber-500/5">
+                <span className="text-[10px] text-amber-400 font-bold uppercase tracking-wider block">Pending Deposits</span>
+                <strong className="text-lg font-mono font-black block text-amber-400">
+                  ₦{transactions.filter(t => t.type === 'deposit' && t.status === 'pending').reduce((acc, t) => acc + Number(t.amount || 0), 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                </strong>
+                <span className="text-[10px] font-mono text-amber-500/80 block">
+                  {transactions.filter(t => t.type === 'deposit' && t.status === 'pending').length} awaiting review
+                </span>
+              </div>
+              <div className="bg-card-bg border border-emerald-500/30 p-5 rounded-3xl shadow-sm hover-lift space-y-1 bg-emerald-500/5">
+                <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider block">Approved Deposits</span>
+                <strong className="text-lg font-mono font-black block text-emerald-400">
+                  ₦{transactions.filter(t => t.type === 'deposit' && t.status === 'completed').reduce((acc, t) => acc + Number(t.amount || 0), 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                </strong>
+                <span className="text-[10px] font-mono text-emerald-500/80 block">
+                  {transactions.filter(t => t.type === 'deposit' && t.status === 'completed').length} credited
+                </span>
+              </div>
+              <div className="bg-card-bg border border-red-500/30 p-5 rounded-3xl shadow-sm hover-lift space-y-1 bg-red-500/5">
+                <span className="text-[10px] text-red-400 font-bold uppercase tracking-wider block">Declined Deposits</span>
+                <strong className="text-lg font-mono font-black block text-red-400">
+                  ₦{transactions.filter(t => t.type === 'deposit' && t.status === 'rejected').reduce((acc, t) => acc + Number(t.amount || 0), 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                </strong>
+                <span className="text-[10px] font-mono text-red-500/80 block">
+                  {transactions.filter(t => t.type === 'deposit' && t.status === 'rejected').length} rejected
+                </span>
+              </div>
+              <div className="bg-card-bg border border-border/40 p-5 rounded-3xl shadow-sm hover-lift space-y-1">
+                <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider block">Total Withdrawals</span>
+                <strong className="text-lg font-mono font-black block text-foreground">
+                  ₦{transactions.filter(t => t.type === 'withdrawal').reduce((acc, t) => acc + Number(t.amount || 0), 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                </strong>
+                <span className="text-[10px] font-mono text-zinc-500 block">
+                  {transactions.filter(t => t.type === 'withdrawal').length} total requests
+                </span>
+              </div>
+              <div className="bg-card-bg border border-amber-500/30 p-5 rounded-3xl shadow-sm hover-lift space-y-1 bg-amber-500/5">
+                <span className="text-[10px] text-amber-400 font-bold uppercase tracking-wider block">Pending Withdrawals</span>
+                <strong className="text-lg font-mono font-black block text-amber-400">
+                  ₦{transactions.filter(t => t.type === 'withdrawal' && t.status === 'pending').reduce((acc, t) => acc + Number(t.amount || 0), 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                </strong>
+                <span className="text-[10px] font-mono text-amber-500/80 block">
+                  {transactions.filter(t => t.type === 'withdrawal' && t.status === 'pending').length} awaiting review
+                </span>
+              </div>
+              <div className="bg-card-bg border border-emerald-500/30 p-5 rounded-3xl shadow-sm hover-lift space-y-1 bg-emerald-500/5">
+                <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider block">Approved Withdrawals</span>
+                <strong className="text-lg font-mono font-black block text-emerald-400">
+                  ₦{transactions.filter(t => t.type === 'withdrawal' && t.status === 'completed').reduce((acc, t) => acc + Number(t.amount || 0), 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                </strong>
+                <span className="text-[10px] font-mono text-emerald-500/80 block">
+                  {transactions.filter(t => t.type === 'withdrawal' && t.status === 'completed').length} settled
+                </span>
+              </div>
+              <div className="bg-card-bg border border-red-500/30 p-5 rounded-3xl shadow-sm hover-lift space-y-1 bg-red-500/5">
+                <span className="text-[10px] text-red-400 font-bold uppercase tracking-wider block">Declined Withdrawals</span>
+                <strong className="text-lg font-mono font-black block text-red-400">
+                  ₦{transactions.filter(t => t.type === 'withdrawal' && t.status === 'rejected').reduce((acc, t) => acc + Number(t.amount || 0), 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                </strong>
+                <span className="text-[10px] font-mono text-red-500/80 block">
+                  {transactions.filter(t => t.type === 'withdrawal' && t.status === 'rejected').length} refunded
+                </span>
+              </div>
+            </div>
+
+            {/* Pending Finance Approvals Queue */}
+            <div className="bg-card-bg border border-border/40 rounded-3xl p-6 md:p-8 shadow-sm space-y-4 text-xs hover-lift">
+              <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 pb-3 border-b border-border/30">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck size={16} className="text-emerald-500" />
+                  <div>
+                    <h3 className="font-bold text-sm font-display text-foreground">Pending Finance Approvals Queue</h3>
+                    <p className="text-[10px] text-zinc-400">Database source of truth for pending deposits and withdrawals</p>
+                  </div>
+                </div>
+                <button
+                  onClick={refreshLists}
+                  className="px-3 py-1.5 rounded-xl border border-border/50 bg-neutral-gray/50 hover:bg-neutral-gray text-zinc-400 hover:text-foreground text-[10px] font-bold flex items-center gap-1.5 transition-all cursor-pointer self-start sm:self-auto"
+                >
+                  <RefreshCw size={12} /> Refresh Queue
+                </button>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="border-b border-border/40 text-zinc-400 font-bold uppercase tracking-widest text-[9px]">
+                      <th className="py-3 px-4">Date / Ref</th>
+                      <th className="py-3 px-4">Type</th>
+                      <th className="py-3 px-4">Customer</th>
+                      <th className="py-3 px-4">Amount</th>
+                      <th className="py-3 px-4">Details</th>
+                      <th className="py-3 px-4 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/30">
+                    {transactions.filter(t => t.status === 'pending').map((tx: any) => {
+                      const user = users.find(u => u.id === tx.user_id);
+                      return (
+                        <tr key={tx.id} className="hover:bg-neutral-gray/30 transition-colors">
+                          <td className="py-3.5 px-4">
+                            <span className="font-mono font-bold text-foreground block">{tx.reference}</span>
+                            <span className="text-[10px] text-zinc-400 font-mono">
+                              {new Date(tx.created_at).toLocaleString()}
+                            </span>
+                          </td>
+                          <td className="py-3.5 px-4">
+                            <span className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded-full border ${
+                              tx.type === 'deposit'
+                                ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                                : 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20'
+                            }`}>
+                              {tx.type}
+                            </span>
+                          </td>
+                          <td className="py-3.5 px-4">
+                            <span className="font-bold text-foreground block">
+                              {tx.user?.name || tx.users?.name || user?.name || 'Customer'}
+                            </span>
+                            <span className="text-[10px] text-zinc-400 font-mono block">
+                              {tx.user?.email || tx.users?.email || user?.email || ''}
+                            </span>
+                            {(tx.user?.phone || tx.users?.phone || user?.phone) && (
+                              <span className="text-[9px] text-zinc-500 font-mono block">
+                                {tx.user?.phone || tx.users?.phone || user?.phone}
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-3.5 px-4 font-mono font-extrabold text-foreground text-sm">
+                            ₦{Number(tx.amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                          </td>
+                          <td className="py-3.5 px-4 text-zinc-400 text-[11px] max-w-xs truncate">
+                            {tx.description}
+                          </td>
+                          <td className="py-3.5 px-4 text-right space-x-2">
+                            <button
+                              onClick={() => tx.type === 'withdrawal' ? handleApproveWithdrawal(tx.id) : handleApproveDeposit(tx.id)}
+                              className="px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-[10px] transition-all cursor-pointer inline-flex items-center gap-1 shadow-sm"
+                            >
+                              <CheckCircle2 size={12} />
+                              Approve
+                            </button>
+                            <button
+                              onClick={() => tx.type === 'withdrawal' ? handleRejectWithdrawal(tx.id) : handleRejectDeposit(tx.id)}
+                              className="px-3 py-1.5 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 font-bold text-[10px] transition-all cursor-pointer inline-flex items-center gap-1"
+                            >
+                              Decline
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {transactions.filter(t => t.status === 'pending').length === 0 && (
+                      <tr>
+                        <td colSpan={6} className="py-8 text-center text-zinc-400 font-semibold">
+                          ✓ All clear! No pending deposits or withdrawals in the review queue.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Full Transaction History Ledger */}
+            <div className="bg-card-bg border border-border/40 rounded-3xl p-6 md:p-8 shadow-sm space-y-4 text-xs hover-lift">
+              <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 pb-3 border-b border-border/30">
+                <div className="flex items-center gap-2">
+                  <FileText size={16} className="text-primary" />
+                  <div>
+                    <h3 className="font-bold text-sm font-display text-foreground">Transaction History Ledger</h3>
+                    <p className="text-[10px] text-zinc-400">Database source of truth for all financial transactions</p>
+                  </div>
+                </div>
+                <span className="text-[10px] font-mono text-zinc-400">
+                  Total: {transactions.length} records
+                </span>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="border-b border-border/40 text-zinc-400 font-bold uppercase tracking-widest text-[9px]">
+                      <th className="py-3 px-4">Ref / Date</th>
+                      <th className="py-3 px-4">Type</th>
+                      <th className="py-3 px-4">Customer</th>
+                      <th className="py-3 px-4">Amount</th>
+                      <th className="py-3 px-4">Description</th>
+                      <th className="py-3 px-4 text-right">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/30">
+                    {transactions.map((tx: any) => {
+                      const user = users.find(u => u.id === tx.user_id);
+                      return (
+                        <tr key={tx.id} className="hover:bg-neutral-gray/30 transition-colors">
+                          <td className="py-3.5 px-4 font-mono">
+                            <span className="font-bold text-foreground block">{tx.reference}</span>
+                            <span className="text-[9px] text-zinc-500">{new Date(tx.created_at).toLocaleString()}</span>
+                          </td>
+                          <td className="py-3.5 px-4 font-bold text-[10px] uppercase">
+                            <span className={`px-2 py-0.5 rounded-full text-[9px] font-mono ${
+                              tx.type === 'deposit' ? 'bg-emerald-500/10 text-emerald-400' :
+                              tx.type === 'withdrawal' ? 'bg-blue-500/10 text-blue-400' :
+                              tx.type === 'penalty_fee' ? 'bg-red-500/10 text-red-400' :
+                              'bg-purple-500/10 text-purple-400'
+                            }`}>
+                              {tx.type}
+                            </span>
+                          </td>
+                          <td className="py-3.5 px-4">
+                            <span className="font-bold text-foreground block">{tx.user?.name || tx.users?.name || user?.name || 'Customer'}</span>
+                            <span className="text-[9px] text-zinc-500 font-mono">{tx.user?.email || tx.users?.email || user?.email || ''}</span>
+                          </td>
+                          <td className="py-3.5 px-4 font-mono font-bold text-foreground">
+                            ₦{Number(tx.amount).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                          </td>
+                          <td className="py-3.5 px-4 text-zinc-400 text-[10px] max-w-xs truncate">
+                            {tx.description}
+                            {tx.rejection_reason && (
+                              <span className="block text-[9px] text-red-400 italic">Reason: {tx.rejection_reason}</span>
+                            )}
+                          </td>
+                          <td className="py-3.5 px-4 text-right">
+                            <span className={`px-2.5 py-1 rounded-full text-[9px] font-bold uppercase font-mono ${
+                              tx.status === 'completed' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
+                              tx.status === 'rejected' ? 'bg-red-500/10 text-red-400 border border-red-500/20' :
+                              'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                            }`}>
+                              {tx.status === 'completed' ? 'Approved' : tx.status === 'rejected' ? 'Declined' : 'Pending'}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {transactions.length === 0 && (
+                      <tr>
+                        <td colSpan={6} className="py-8 text-center text-zinc-400">No transactions recorded in database yet.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* VIEW 2: CUSTOMER SUPPORT WORKSPACE VIEW */}
+        {viewingAsRole === 'Customer Support' && (
+          <div className="space-y-8 animate-fade-in">
+            {/* Customer Support Statistics */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+              <div className="bg-card-bg border border-border/40 p-6 rounded-3xl shadow-sm text-center hover-lift space-y-1">
+                <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider block">Total Customers</span>
+                <strong className="text-2xl font-mono font-black text-foreground block">{users.length}</strong>
+                <span className="text-[10px] text-zinc-500">Registered platform users</span>
+              </div>
+
+              <div className="bg-card-bg border border-emerald-500/30 p-6 rounded-3xl shadow-sm text-center hover-lift space-y-1 bg-emerald-500/5">
+                <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider block">Active Customers</span>
+                <strong className="text-2xl font-mono font-black text-emerald-400 block">{users.filter(u => !u.is_locked).length}</strong>
+                <span className="text-[10px] text-emerald-500/80">Operational accounts</span>
+              </div>
+
+              <div className="bg-card-bg border border-primary/30 p-6 rounded-3xl shadow-sm text-center hover-lift space-y-1 bg-primary/5">
+                <span className="text-[10px] text-primary font-bold uppercase tracking-wider block">Verified Customers</span>
+                <strong className="text-2xl font-mono font-black text-primary block">{users.filter(u => u.is_verified).length}</strong>
+                <span className="text-[10px] text-primary/80">2FA / OTP verified</span>
+              </div>
+            </div>
+
+            {/* Customer Directory Table */}
+            <div className="bg-card-bg border border-border/40 rounded-3xl p-6 md:p-8 shadow-sm space-y-4 text-xs hover-lift">
+              <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 pb-3 border-b border-border/30">
+                <div className="flex items-center gap-2">
+                  <Users size={16} className="text-primary" />
+                  <div>
+                    <h3 className="font-bold text-sm font-display text-foreground">Registered Customer Directory</h3>
+                    <p className="text-[10px] text-zinc-400">Confidential customer lookup & support management (Passwords/PINs secured)</p>
+                  </div>
+                </div>
+                <div className="relative">
+                  <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
+                  <input
+                    type="text"
+                    placeholder="Search customers..."
+                    value={usersSearch}
+                    onChange={(e) => setUsersSearch(e.target.value)}
+                    className="pl-8 pr-3 py-1.5 rounded-xl bg-input-bg border border-border/60 text-xs focus:border-primary focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="border-b border-border/40 text-zinc-400 font-bold uppercase tracking-widest text-[9px]">
+                      <th className="py-3 px-4">Customer</th>
+                      <th className="py-3 px-4">Contact / WhatsApp</th>
+                      <th className="py-3 px-4">Wallet Balance</th>
+                      <th className="py-3 px-4">Savings Plans</th>
+                      <th className="py-3 px-4">Joined</th>
+                      <th className="py-3 px-4">Status</th>
+                      <th className="py-3 px-4 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/30">
+                    {users
+                      .filter(c => 
+                        c.name?.toLowerCase().includes(usersSearch.toLowerCase()) || 
+                        c.email?.toLowerCase().includes(usersSearch.toLowerCase()) ||
+                        (c.phone && c.phone.includes(usersSearch))
+                      )
+                      .map((cust: any) => (
+                        <tr key={cust.id} className="hover:bg-neutral-gray/30 transition-colors">
+                          <td className="py-3.5 px-4">
+                            <strong className="text-foreground block">{cust.name}</strong>
+                            <span className="text-[10px] text-zinc-400 font-mono">{cust.email}</span>
+                          </td>
+                          <td className="py-3.5 px-4 font-mono text-zinc-300">
+                            {cust.phone || 'Not provided'}
+                          </td>
+                          <td className="py-3.5 px-4 font-mono font-bold text-foreground">
+                            ₦{Number(cust.wallet?.wallet_balance ?? (DB.getWalletForUser(cust.id)?.wallet_balance || 0)).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                          </td>
+                          <td className="py-3.5 px-4 font-mono text-primary font-bold">
+                            {cust.savings_plans?.length ?? savingsPlans.filter(p => p.user_id === cust.id).length} active
+                          </td>
+                          <td className="py-3.5 px-4 font-mono text-[10px] text-zinc-400">
+                            {new Date(cust.created_at).toLocaleDateString()}
+                          </td>
+                          <td className="py-3.5 px-4">
+                            <span className={`px-2.5 py-0.5 rounded-full text-[9px] font-bold uppercase font-mono ${cust.is_locked ? 'bg-red-500/10 text-red-400 border border-red-500/20' : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'}`}>
+                              {cust.is_locked ? 'Locked' : 'Active'}
+                            </span>
+                          </td>
+                          <td className="py-3.5 px-4 text-right">
+                            {cust.is_locked ? (
+                              <button
+                                onClick={() => handleUnlockCustomer(cust.id)}
+                                className="px-3 py-1 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg text-[10px] font-bold cursor-pointer transition-colors"
+                              >
+                                Unlock Profile
+                              </button>
+                            ) : (
+                              <span className="text-[10px] text-zinc-500 font-mono">Normal</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    {users.length === 0 && (
+                      <tr>
+                        <td colSpan={7} className="py-8 text-center text-zinc-400">No registered customers found in database.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* VIEW 3: SUPER ADMIN TABS (DEFAULT VIEW) */}
+        {viewingAsRole === 'Super Admin' && (
+          <>
+            {/* Navigation Tabs */}
+            <div className="flex border-b border-border/40 mb-8 overflow-x-auto gap-6 text-sm font-semibold select-none">
+              <button 
+                onClick={() => setActiveSubTab('cms')}
+                className={`pb-3.5 border-b-2 px-1 transition-colors cursor-pointer font-display ${activeSubTab === 'cms' ? 'border-primary text-primary' : 'border-transparent text-zinc-400 hover:text-foreground'}`}
+              >
+                System Branding & Rules
+              </button>
+              <button 
+                onClick={() => {
+                  setActiveSubTab('staff');
+                  fetchStaffList();
+                }}
+                className={`pb-3.5 border-b-2 px-1 transition-colors cursor-pointer font-display flex items-center gap-1.5 ${activeSubTab === 'staff' ? 'border-primary text-primary' : 'border-transparent text-zinc-400 hover:text-foreground'}`}
+              >
+                <Shield size={14} />
+                <span>Staff Management</span>
+                <span className="bg-primary/20 text-primary text-[10px] font-bold px-1.5 py-0.5 rounded-full font-mono">
+                  {staffList.length}
+                </span>
+              </button>
+              <button 
+                onClick={() => {
+                  setActiveSubTab('transactions');
+                  refreshLists();
+                }}
+                className={`pb-3.5 border-b-2 px-1 transition-colors cursor-pointer font-display ${activeSubTab === 'transactions' ? 'border-primary text-primary' : 'border-transparent text-zinc-400 hover:text-foreground'}`}
+              >
+                Pending Deposits
+              </button>
+              <button 
+                onClick={() => setActiveSubTab('users')}
+                className={`pb-3.5 border-b-2 px-1 transition-colors cursor-pointer font-display ${activeSubTab === 'users' ? 'border-primary text-primary' : 'border-transparent text-zinc-400 hover:text-foreground'}`}
+              >
+                Customer Accounts
+              </button>
+              <button 
+                onClick={() => setActiveSubTab('portfolios')}
+                className={`pb-3.5 border-b-2 px-1 transition-colors cursor-pointer font-display ${activeSubTab === 'portfolios' ? 'border-primary text-primary' : 'border-transparent text-zinc-400 hover:text-foreground'}`}
+              >
+                Active Savings Plans
+              </button>
+              <button 
+                onClick={() => setActiveSubTab('audit')}
+                className={`pb-3.5 border-b-2 px-1 transition-colors cursor-pointer font-display ${activeSubTab === 'audit' ? 'border-primary text-primary' : 'border-transparent text-zinc-400 hover:text-foreground'}`}
+              >
+                Compliance Audits
+              </button>
+              <button 
+                onClick={() => {
+                  setActiveSubTab('food_reserve');
+                  refreshLists();
+                }}
+                className={`pb-3.5 border-b-2 px-1 transition-colors cursor-pointer font-display flex items-center gap-1.5 ${activeSubTab === 'food_reserve' ? 'border-primary text-primary' : 'border-transparent text-zinc-400 hover:text-foreground'}`}
+              >
+                <ShoppingBag size={14} />
+                <span>Food Reserve & Orders</span>
+                {foodOrders.filter(o => o.status === 'pending').length > 0 && (
+                  <span className="bg-emerald-500/20 text-emerald-400 text-[10px] font-bold px-1.5 py-0.5 rounded-full font-mono">
+                    {foodOrders.filter(o => o.status === 'pending').length}
+                  </span>
+                )}
+              </button>
+            </div>
+          </>
         )}
 
         {/* SUBTAB 1: SAVINGS PARAMETERS & BRANDING */}
@@ -1121,13 +1645,13 @@ export default function AdminPortal() {
                           </td>
                           <td className="py-4 px-4 text-right space-x-2">
                             <button
-                              onClick={() => handleApproveTransfer(tx.id)}
+                              onClick={() => tx.type === 'withdrawal' ? handleApproveWithdrawal(tx.id) : handleApproveDeposit(tx.id)}
                               className="bg-emerald-600 hover:bg-emerald-700 text-white px-3.5 py-2 rounded-xl font-bold transition-all cursor-pointer shadow-md shadow-emerald-500/10 font-sans"
                             >
-                              Approve & Credit
+                              Approve
                             </button>
                             <button
-                              onClick={() => handleRejectTransfer(tx.id)}
+                              onClick={() => tx.type === 'withdrawal' ? handleRejectWithdrawal(tx.id) : handleRejectDeposit(tx.id)}
                               className="bg-red-500/10 hover:bg-red-500/20 text-red-500 px-3.5 py-2 rounded-xl font-bold transition-all cursor-pointer font-sans"
                             >
                               Decline
