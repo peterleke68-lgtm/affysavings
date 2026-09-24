@@ -70,7 +70,9 @@ export default function AdminPortal() {
   const [selfPasswordData, setSelfPasswordData] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
   
   // Data lists
-  const [users, setUsers] = useState<User[]>([]);
+  const [users, setUsers] = useState<any[]>([]);
+  const [loadingUsers, setLoadingUsers] = useState<boolean>(false);
+  const [usersError, setUsersError] = useState<string>('');
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [savingsPlans, setSavingsPlans] = useState<SavingsPlan[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
@@ -174,8 +176,28 @@ export default function AdminPortal() {
     };
   }, [cms]);
 
+  const fetchAdminUsers = async () => {
+    setLoadingUsers(true);
+    setUsersError('');
+    try {
+      const uRes = await fetch('/api/admin/users');
+      const uData = await uRes.json();
+      if (uData.success && Array.isArray(uData.users)) {
+        setUsers(uData.users);
+      } else {
+        setUsersError(uData.error || 'Failed to fetch customer directory.');
+      }
+    } catch (err) {
+      console.warn('[Admin Portal] Failed to fetch live admin users:', err);
+      setUsersError('Unable to reach server to load customers.');
+    } finally {
+      setLoadingUsers(false);
+    }
+  };
+
   const refreshLists = async () => {
-    setUsers(DB.getUsers());
+    // Database API is the sole authoritative source for users - never overwrite with localStorage mock users!
+    fetchAdminUsers();
     setTransactions(DB.getTransactions());
     setSavingsPlans(DB.getSavingsPlans());
     setAuditLogs(DB.getAuditLogs());
@@ -183,16 +205,6 @@ export default function AdminPortal() {
     setFoodItems(DB.getFoodItems());
     setFoodOrders(DB.getFoodOrders());
     fetchStaffList();
-
-    try {
-      const uRes = await fetch('/api/admin/users');
-      const uData = await uRes.json();
-      if (uData.success && uData.users && uData.users.length > 0) {
-        setUsers(uData.users);
-      }
-    } catch (err) {
-      console.warn('Failed to fetch live admin users:', err);
-    }
 
     try {
       const tRes = await fetch('/api/finance/transactions');
@@ -1127,6 +1139,36 @@ export default function AdminPortal() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border/30">
+                    {loadingUsers && users.length === 0 && (
+                      <tr>
+                        <td colSpan={7} className="py-12 text-center text-zinc-400 font-mono">
+                          <div className="flex items-center justify-center gap-2">
+                            <RefreshCw size={14} className="animate-spin text-primary" />
+                            <span>Loading customer directory from production database...</span>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                    {usersError && users.length === 0 && (
+                      <tr>
+                        <td colSpan={7} className="py-8 text-center text-red-400">
+                          <p className="font-semibold mb-2">{usersError}</p>
+                          <button
+                            onClick={fetchAdminUsers}
+                            className="px-3 py-1.5 rounded-xl bg-primary/10 hover:bg-primary/20 text-primary text-xs font-bold transition-all cursor-pointer"
+                          >
+                            Retry
+                          </button>
+                        </td>
+                      </tr>
+                    )}
+                    {!loadingUsers && users.length === 0 && !usersError && (
+                      <tr>
+                        <td colSpan={7} className="py-8 text-center text-zinc-400">
+                          No registered customers found in database.
+                        </td>
+                      </tr>
+                    )}
                     {users
                       .filter(c => 
                         c.name?.toLowerCase().includes(usersSearch.toLowerCase()) || 
@@ -1143,10 +1185,10 @@ export default function AdminPortal() {
                             {cust.phone || 'Not provided'}
                           </td>
                           <td className="py-3.5 px-4 font-mono font-bold text-foreground">
-                            ₦{Number(cust.wallet?.wallet_balance ?? (DB.getWalletForUser(cust.id)?.wallet_balance || 0)).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                            ₦{Number(cust.wallet?.wallet_balance ?? (cust.wallet?.balance ?? 0)).toLocaleString(undefined, {minimumFractionDigits: 2})}
                           </td>
                           <td className="py-3.5 px-4 font-mono text-primary font-bold">
-                            {cust.savings_plans?.length ?? savingsPlans.filter(p => p.user_id === cust.id).length} active
+                            {cust.savings_plans?.length ?? 0} active
                           </td>
                           <td className="py-3.5 px-4 font-mono text-[10px] text-zinc-400">
                             {new Date(cust.created_at).toLocaleDateString()}
@@ -1170,9 +1212,13 @@ export default function AdminPortal() {
                           </td>
                         </tr>
                       ))}
-                    {users.length === 0 && (
+                    {!loadingUsers && users.length > 0 && users.filter(c => 
+                      c.name?.toLowerCase().includes(usersSearch.toLowerCase()) || 
+                      c.email?.toLowerCase().includes(usersSearch.toLowerCase()) ||
+                      (c.phone && c.phone.includes(usersSearch))
+                    ).length === 0 && (
                       <tr>
-                        <td colSpan={7} className="py-8 text-center text-zinc-400">No registered customers found in database.</td>
+                        <td colSpan={7} className="py-8 text-center text-zinc-400">No matching customers found for "{usersSearch}".</td>
                       </tr>
                     )}
                   </tbody>
@@ -1701,16 +1747,46 @@ export default function AdminPortal() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/30">
+                  {loadingUsers && users.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="py-12 text-center text-zinc-400 font-mono">
+                        <div className="flex items-center justify-center gap-2">
+                          <RefreshCw size={14} className="animate-spin text-primary" />
+                          <span>Loading customer directory from production database...</span>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  {usersError && users.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="py-8 text-center text-red-400">
+                        <p className="font-semibold mb-2">{usersError}</p>
+                        <button
+                          onClick={fetchAdminUsers}
+                          className="px-3 py-1.5 rounded-xl bg-primary/10 hover:bg-primary/20 text-primary text-xs font-bold transition-all cursor-pointer"
+                        >
+                          Retry
+                        </button>
+                      </td>
+                    </tr>
+                  )}
+                  {!loadingUsers && users.length === 0 && !usersError && (
+                    <tr>
+                      <td colSpan={6} className="py-8 text-center text-zinc-400">
+                        No registered customers found in database.
+                      </td>
+                    </tr>
+                  )}
                   {users
                     .filter(u => u.name.toLowerCase().includes(usersSearch.toLowerCase()) || u.email.toLowerCase().includes(usersSearch.toLowerCase()))
                     .map(user => {
-                      const w = DB.getWalletForUser(user.id);
+                      const walletBal = user.wallet?.wallet_balance ?? (user.wallet?.balance ?? 0);
                       return (
                         <tr key={user.id} className="hover:bg-neutral-gray/30 transition-colors">
                           <td className="py-4 px-4 font-bold text-foreground">{user.name}</td>
                           <td className="py-4 px-4 font-mono text-[10px] text-zinc-400">{user.email}</td>
-                          <td className="py-4 px-4 font-mono text-zinc-400">{user.phone}</td>
-                          <td className="py-4 px-4 font-mono font-extrabold text-primary">₦{w.wallet_balance.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                          <td className="py-4 px-4 font-mono text-zinc-400">{user.phone || 'N/A'}</td>
+                          <td className="py-4 px-4 font-mono font-extrabold text-primary">₦{Number(walletBal).toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
                           <td className="py-4 px-4">
                             <span className={`px-2.5 py-0.5 rounded-full text-[9px] font-bold ${
                               user.is_locked ? 'bg-red-500/10 text-red-500' : 'bg-emerald-500/10 text-emerald-500'
@@ -1735,6 +1811,14 @@ export default function AdminPortal() {
                         </tr>
                       );
                     })}
+                  {!loadingUsers && users.length > 0 && users.filter(u => 
+                    u.name.toLowerCase().includes(usersSearch.toLowerCase()) || 
+                    u.email.toLowerCase().includes(usersSearch.toLowerCase())
+                  ).length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="py-8 text-center text-zinc-400">No matching customers found for "{usersSearch}".</td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>

@@ -58,20 +58,26 @@ export async function POST(request: NextRequest) {
     // Handle signup activation
     if (type === 'signup') {
       const pendingReg = getPendingRegistration(normalizedEmail);
+      
+      // Check if user already exists in database if pendingReg cache was cleared
+      let existingUserInDb = null;
       if (!pendingReg) {
-        return NextResponse.json(
-          { success: false, error: 'Registration session expired. Please submit the signup form again.' },
-          { status: 400 }
-        );
+        existingUserInDb = await getUserByEmailWithCredentials(normalizedEmail);
+        if (!existingUserInDb) {
+          return NextResponse.json(
+            { success: false, error: 'Registration session expired. Please submit the signup form again.' },
+            { status: 400 }
+          );
+        }
       }
 
       // Create or update verified user in database with password & PIN hashes
       const user = await createVerifiedUser({
         email: normalizedEmail,
-        name: pendingReg.name,
-        phone: pendingReg.phone,
-        passwordHash: pendingReg.passwordHash,
-        pinHash: pendingReg.pinHash,
+        name: pendingReg?.name || existingUserInDb?.name,
+        phone: pendingReg?.phone || existingUserInDb?.phone,
+        passwordHash: pendingReg?.passwordHash || existingUserInDb?.password_hash || undefined,
+        pinHash: pendingReg?.pinHash || existingUserInDb?.pin_hash || undefined,
         deviceInfo,
       });
 

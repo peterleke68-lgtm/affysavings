@@ -9,7 +9,9 @@ import {
 import { sendOtpEmail } from '@/lib/email';
 import { hashPassword, hashPin, validatePassword, validatePin } from '@/lib/credentials';
 
-// In-memory store for pending registrations awaiting OTP verification
+import { registerPendingUser } from '@/lib/supabase-server';
+
+// In-memory store for pending registrations awaiting OTP verification (fast L1 cache)
 export interface PendingRegistration {
   name: string;
   email: string;
@@ -111,6 +113,20 @@ export async function POST(request: NextRequest) {
         pinHash,
         createdAt: Date.now(),
       });
+
+      // Persist pending registration record to database (with is_verified: false)
+      try {
+        await registerPendingUser({
+          email: normalizedEmail,
+          name: name.trim(),
+          phone: (phone || '').trim(),
+          passwordHash,
+          pinHash,
+        });
+      } catch (dbErr) {
+        console.error('[send-otp] Failed to persist pending user to database:', dbErr);
+        // Continue with memory cache and OTP dispatch
+      }
     }
 
     // Rate limit check

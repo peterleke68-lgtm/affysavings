@@ -44,7 +44,9 @@ export default function StaffPortal() {
   }, [currentStaff, router]);
 
   // Lists
-  const [customerList, setCustomerList] = useState<User[]>([]);
+  const [customerList, setCustomerList] = useState<any[]>([]);
+  const [loadingCustomers, setLoadingCustomers] = useState(false);
+  const [customersError, setCustomersError] = useState('');
   const [savingsList, setSavingsList] = useState<SavingsPlan[]>([]);
   const [transactionList, setTransactionList] = useState<Transaction[]>([]);
   const [auditList, setAuditList] = useState<AuditLog[]>([]);
@@ -168,14 +170,21 @@ export default function StaffPortal() {
   };
 
   const fetchCustomerDirectory = async () => {
+    setLoadingCustomers(true);
+    setCustomersError('');
     try {
       const res = await fetch('/api/admin/users');
       const data = await res.json();
-      if (data.success && data.users) {
+      if (data.success && Array.isArray(data.users)) {
         setCustomerList(data.users);
+      } else {
+        setCustomersError(data.error || 'Failed to load customer directory.');
       }
     } catch (e) {
       console.error('Failed to fetch customer directory:', e);
+      setCustomersError('Network error loading customers.');
+    } finally {
+      setLoadingCustomers(false);
     }
   };
 
@@ -1087,6 +1096,36 @@ export default function StaffPortal() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-border/30">
+                        {loadingCustomers && customerList.length === 0 && (
+                          <tr>
+                            <td colSpan={7} className="py-12 text-center text-zinc-400 font-mono">
+                              <div className="flex items-center justify-center gap-2">
+                                <RefreshCw size={14} className="animate-spin text-primary" />
+                                <span>Loading customer directory from production database...</span>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                        {customersError && customerList.length === 0 && (
+                          <tr>
+                            <td colSpan={7} className="py-8 text-center text-red-400">
+                              <p className="font-semibold mb-2">{customersError}</p>
+                              <button
+                                onClick={fetchCustomerDirectory}
+                                className="px-3 py-1.5 rounded-xl bg-primary/10 hover:bg-primary/20 text-primary text-xs font-bold transition-all cursor-pointer"
+                              >
+                                Retry
+                              </button>
+                            </td>
+                          </tr>
+                        )}
+                        {!loadingCustomers && customerList.length === 0 && !customersError && (
+                          <tr>
+                            <td colSpan={7} className="py-8 text-center text-zinc-400">
+                              No registered customers found in database.
+                            </td>
+                          </tr>
+                        )}
                         {customerList
                           .filter(c => 
                             c.name?.toLowerCase().includes(searchQuery.toLowerCase()) || 
@@ -1103,7 +1142,7 @@ export default function StaffPortal() {
                                 {cust.phone || 'Not provided'}
                               </td>
                               <td className="py-3.5 px-4 font-mono font-bold text-foreground">
-                                ₦{Number(cust.wallet?.wallet_balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                                ₦{Number(cust.wallet?.wallet_balance ?? (cust.wallet?.balance ?? 0)).toLocaleString(undefined, {minimumFractionDigits: 2})}
                               </td>
                               <td className="py-3.5 px-4 font-mono text-primary font-bold">
                                 {cust.savings_plans?.length || 0} active
@@ -1130,9 +1169,13 @@ export default function StaffPortal() {
                               </td>
                             </tr>
                           ))}
-                        {customerList.length === 0 && (
+                        {!loadingCustomers && customerList.length > 0 && customerList.filter(c => 
+                          c.name?.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                          c.email?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                          (c.phone && c.phone.includes(searchQuery))
+                        ).length === 0 && (
                           <tr>
-                            <td colSpan={7} className="py-8 text-center text-zinc-400">No registered customers found in database.</td>
+                            <td colSpan={7} className="py-8 text-center text-zinc-400">No matching customers found for "{searchQuery}".</td>
                           </tr>
                         )}
                       </tbody>

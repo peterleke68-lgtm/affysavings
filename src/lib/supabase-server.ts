@@ -167,103 +167,183 @@ export async function getUserByEmail(email: string): Promise<Omit<DbUser, 'passw
 
 /**
  * Creates or updates a verified user with password and PIN hashes upon registration.
+/**
+ * Pre-registers a pending unverified user in Supabase during signup OTP dispatch.
  */
-export async function createVerifiedUser(data: {
+export async function registerPendingUser(data: {
   email: string;
   name: string;
   phone: string;
   passwordHash: string;
   pinHash: string;
+}): Promise<DbUser> {
+  const normalizedEmail = data.email.toLowerCase().trim();
+  const supabase = getSupabaseAdminClient();
+  if (!supabase) {
+    throw new Error('Database service unavailable.');
+  }
+
+  const now = new Date().toISOString();
+
+  // Check if user already exists
+  const { data: existing, error: findErr } = await supabase
+    .from('users')
+    .select('*')
+    .ilike('email', normalizedEmail)
+    .maybeSingle();
+
+  if (findErr) {
+    console.error('[Supabase Server] Error checking existing user in registerPendingUser:', findErr);
+  }
+
+  if (existing) {
+    const { data: updated, error: updateErr } = await supabase
+      .from('users')
+      .update({
+        name: data.name || existing.name,
+        phone: data.phone || existing.phone,
+        password_hash: data.passwordHash,
+        pin_hash: data.pinHash,
+        updated_at: now,
+      })
+      .eq('id', existing.id)
+      .select('*')
+      .single();
+
+    if (updateErr || !updated) {
+      console.error('[Supabase Server] Failed to update pending user:', updateErr);
+      throw new Error(updateErr?.message || 'Failed to update registration record.');
+    }
+
+    return updated as DbUser;
+  }
+
+  // Insert new pending user
+  const newId = generateUUID();
+  const { data: inserted, error: insertErr } = await supabase
+    .from('users')
+    .insert({
+      id: newId,
+      email: normalizedEmail,
+      name: data.name,
+      phone: data.phone,
+      avatar_url: '',
+      password_hash: data.passwordHash,
+      pin_hash: data.pinHash,
+      is_verified: false,
+      two_factor_enabled: false,
+      two_factor_secret: '',
+      is_locked: false,
+      failed_attempts: 0,
+      device_tracking: [],
+      created_at: now,
+      updated_at: now,
+    })
+    .select('*')
+    .single();
+
+  if (insertErr || !inserted) {
+    console.error('[Supabase Server] Failed to insert pending user:', insertErr);
+    throw new Error(insertErr?.message || 'Failed to create user record.');
+  }
+
+  return inserted as DbUser;
+}
+
+/**
+ * Creates or updates a verified user with password and PIN hashes upon registration.
+ */
+export async function createVerifiedUser(data: {
+  email: string;
+  name?: string;
+  phone?: string;
+  passwordHash?: string;
+  pinHash?: string;
   deviceInfo?: any;
 }): Promise<DbUser> {
   const normalizedEmail = data.email.toLowerCase().trim();
   const supabase = getSupabaseAdminClient();
-  const now = new Date().toISOString();
-
-  if (supabase) {
-    try {
-      // 1. Check if user already exists
-      const { data: existing } = await supabase
-        .from('users')
-        .select('*')
-        .ilike('email', normalizedEmail)
-        .maybeSingle();
-
-      if (existing) {
-        // Update user credentials & mark verified
-        const { data: updated, error: updateErr } = await supabase
-          .from('users')
-          .update({
-            name: data.name || existing.name,
-            phone: data.phone || existing.phone,
-            password_hash: data.passwordHash,
-            pin_hash: data.pinHash,
-            is_verified: true,
-            is_locked: false,
-            failed_attempts: 0,
-            updated_at: now,
-          })
-          .eq('id', existing.id)
-          .select('*')
-          .single();
-
-        if (!updateErr && updated) {
-          await ensureUserWallet(updated.id);
-          return updated as DbUser;
-        }
-      }
-
-      // 2. Insert fresh user row
-      const newId = generateUUID();
-      const { data: inserted, error: insertErr } = await supabase
-        .from('users')
-        .insert({
-          id: newId,
-          email: normalizedEmail,
-          name: data.name,
-          phone: data.phone,
-          avatar_url: '',
-          password_hash: data.passwordHash,
-          pin_hash: data.pinHash,
-          is_verified: true,
-          two_factor_enabled: false,
-          two_factor_secret: '',
-          is_locked: false,
-          failed_attempts: 0,
-          device_tracking: data.deviceInfo ? [data.deviceInfo] : [],
-          created_at: now,
-          updated_at: now,
-        })
-        .select('*')
-        .single();
-
-      if (!insertErr && inserted) {
-        await ensureUserWallet(inserted.id);
-        return inserted as DbUser;
-      }
-    } catch (err) {
-      console.error('[Supabase Server] Database error during createVerifiedUser:', err);
-    }
+  if (!supabase) {
+    throw new Error('Database service unavailable.');
   }
 
-  // In-memory fallback
-  const fallback: DbUser = {
-    id: generateUUID(),
-    email: normalizedEmail,
-    name: data.name,
-    phone: data.phone,
-    avatar_url: '',
-    password_hash: data.passwordHash,
-    pin_hash: data.pinHash,
-    is_verified: true,
-    two_factor_enabled: false,
-    two_factor_secret: '',
-    is_locked: false,
-    failed_attempts: 0,
-    device_tracking: data.deviceInfo ? [data.deviceInfo] : [],
-    created_at: now,
-  };
-  return fallback;
+  const now = new Date().toISOString();
+
+  // 1. Check if user already exists
+  const { data: existing, error: findErr } = await supabase
+    .from('users')
+    .select('*')
+    .ilike('email', normalizedEmail)
+    .maybeSingle();
+
+  if (findErr) {
+    console.error('[Supabase Server] Error checking existing user in createVerifiedUser:', findErr);
+    throw new Error(findErr.message || 'Database error looking up user.');
+  }
+
+  if (existing) {
+    const updatePayload: Record<string, any> = {
+      is_verified: true,
+      is_locked: false,
+      failed_attempts: 0,
+      updated_at: now,
+    };
+    if (data.name) updatePayload.name = data.name;
+    if (data.phone) updatePayload.phone = data.phone;
+    if (data.passwordHash) updatePayload.password_hash = data.passwordHash;
+    if (data.pinHash) updatePayload.pin_hash = data.pinHash;
+    if (data.deviceInfo) {
+      const currentDevices = Array.isArray(existing.device_tracking) ? existing.device_tracking : [];
+      updatePayload.device_tracking = [data.deviceInfo, ...currentDevices.filter((d: any) => d.id !== data.deviceInfo.id)].slice(0, 10);
+    }
+
+    const { data: updated, error: updateErr } = await supabase
+      .from('users')
+      .update(updatePayload)
+      .eq('id', existing.id)
+      .select('*')
+      .single();
+
+    if (updateErr || !updated) {
+      console.error('[Supabase Server] Failed to verify existing user in DB:', updateErr);
+      throw new Error(updateErr?.message || 'Failed to update verified user profile.');
+    }
+
+    await ensureUserWallet(updated.id);
+    return updated as DbUser;
+  }
+
+  // 2. Insert fresh user row
+  const newId = generateUUID();
+  const { data: inserted, error: insertErr } = await supabase
+    .from('users')
+    .insert({
+      id: newId,
+      email: normalizedEmail,
+      name: data.name || 'Affy Customer',
+      phone: data.phone || '',
+      avatar_url: '',
+      password_hash: data.passwordHash || null,
+      pin_hash: data.pinHash || null,
+      is_verified: true,
+      two_factor_enabled: false,
+      two_factor_secret: '',
+      is_locked: false,
+      failed_attempts: 0,
+      device_tracking: data.deviceInfo ? [data.deviceInfo] : [],
+      created_at: now,
+      updated_at: now,
+    })
+    .select('*')
+    .single();
+
+  if (insertErr || !inserted) {
+    console.error('[Supabase Server] Failed to insert verified user:', insertErr);
+    throw new Error(insertErr?.message || 'Failed to insert user profile.');
+  }
+
+  await ensureUserWallet(inserted.id);
+  return inserted as DbUser;
 }
 
 /**

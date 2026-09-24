@@ -507,109 +507,36 @@ export const initializeDB = () => {
     localStorage.setItem("affy_v4_uuid_reset", "true");
   }
 
-  // Run migrations for existing users/staff to change email domain to @affysavings.com
+  // Clear any obsolete demo / mock users or staff from localStorage
   const existingUsers = getStorage<User[]>(USERS_KEY, []);
-  if (existingUsers.length > 0 && existingUsers.some(u => u.email.endsWith('@affybank.com'))) {
-    const updatedUsers = existingUsers.map(u => ({
-      ...u,
-      email: u.email.replace('@affybank.com', '@affysavings.com')
-    }));
-    setStorage(USERS_KEY, updatedUsers);
+  const sanitizedUsers = existingUsers.filter(u => 
+    u.email !== 'customer@affysavings.com' && 
+    u.name !== 'Jane Doe'
+  );
+  if (sanitizedUsers.length !== existingUsers.length) {
+    setStorage(USERS_KEY, sanitizedUsers);
   }
 
   const existingStaff = getStorage<StaffProfile[]>(STAFF_KEY, []);
-  if (existingStaff.length > 0 && existingStaff.some(s => s.email.endsWith('@affybank.com'))) {
-    const updatedStaff = existingStaff.map(s => ({
-      ...s,
-      email: s.email.replace('@affybank.com', '@affysavings.com')
-    }));
-    setStorage(STAFF_KEY, updatedStaff);
+  const sanitizedStaff = existingStaff.filter(s => 
+    s.email !== 'support@affysavings.com' && 
+    s.name !== 'John Doe' &&
+    s.email !== 'operations@affysavings.com' &&
+    s.name !== 'Sarah Connor' &&
+    s.email !== 'compliance@affysavings.com' &&
+    s.name !== 'Robert Miller' &&
+    s.email !== 'finance@affysavings.com' &&
+    s.name !== 'Alice Smith'
+  );
+  if (sanitizedStaff.length !== existingStaff.length) {
+    setStorage(STAFF_KEY, sanitizedStaff);
   }
 
-  const users = getStorage<User[]>(USERS_KEY, []);
-  if (users.length === 0) {
-    const customerId = "d29078f4-6c32-4ca6-a5db-2b5003661234";
-    const newUsers: User[] = [
-      {
-        id: customerId,
-        email: "customer@affysavings.com",
-        name: "Jane Doe",
-        phone: "+1 (555) 123-4567",
-        avatar_url: "",
-        is_verified: true,
-        two_factor_enabled: false,
-        two_factor_secret: "SECRET123",
-        is_locked: false,
-        failed_attempts: 0,
-        device_tracking: [
-          { id: "1", device: "Chrome / Windows 11", ip: "192.168.1.100", date: new Date().toISOString() }
-        ],
-        created_at: new Date().toISOString()
-      },
-      {
-        id: "e3c1a357-19aa-4ab5-950c-99d9b626e828",
-        email: "admin@affysavings.com",
-        name: "Super Admin",
-        phone: "+1 (555) 999-0000",
-        avatar_url: "",
-        is_verified: true,
-        two_factor_enabled: false,
-        two_factor_secret: "",
-        is_locked: false,
-        failed_attempts: 0,
-        device_tracking: [],
-        created_at: new Date().toISOString()
-      }
-    ];
-    setStorage(USERS_KEY, newUsers);
-
-    // Seed Wallet for customer
-    const newWallets: Wallet[] = [
-      {
-        id: "0b6c24be-0720-43db-9d8e-5b1234e56789",
-        user_id: customerId,
-        balance: 0.00,
-        wallet_balance: 0.00, // tracks fluid cash available
-        currency: "NGN"
-      }
-    ];
-    setStorage(WALLETS_KEY, newWallets);
-
-    // Seed Strict Savings Plans (Empty at default for zero balance)
-    const newSavings: SavingsPlan[] = [];
-    setStorage(SAVINGS_KEY, newSavings);
-
-    // Seed initial Transactions (Empty at default for zero balance)
-    const newTransactions: Transaction[] = [];
-    setStorage(TRANSACTIONS_KEY, newTransactions);
-
-    // Seed Linked Accounts
-    const newAccounts: LinkedAccount[] = [
-      {
-        id: "948fa886-fca9-482a-a92c-55b6efdf4001",
-        user_id: customerId,
-        bank_name: "Chase Bank",
-        account_number: "**** 4829",
-        account_holder: "Jane Doe",
-        is_default: true,
-        status: "verified",
-        created_at: new Date().toISOString()
-      }
-    ];
-    setStorage(ACCOUNTS_KEY, newAccounts);
-  }
-
-  // Seed Staff
-  const staff = getStorage<StaffProfile[]>(STAFF_KEY, []);
-  if (staff.length === 0) {
-    const defaultStaff: StaffProfile[] = [
-      { id: "b361a357-19aa-4ab5-950c-99d9b626e821", email: "admin@affysavings.com", name: "Super Admin", role: "Super Admin", permissions: ["all"], is_active: true },
-      { id: "b361a357-19aa-4ab5-950c-99d9b626e822", email: "operations@affysavings.com", name: "Sarah Connor", role: "Operations", permissions: ["manage_users", "approve_accounts"], is_active: true },
-      { id: "b361a357-19aa-4ab5-950c-99d9b626e823", email: "support@affysavings.com", name: "John Doe", role: "Customer Support", permissions: ["view_users", "view_transactions"], is_active: true },
-      { id: "b361a357-19aa-4ab5-950c-99d9b626e824", email: "compliance@affysavings.com", name: "Robert Miller", role: "Compliance", permissions: ["review_transactions", "view_audit_logs"], is_active: true },
-      { id: "b361a357-19aa-4ab5-950c-99d9b626e825", email: "finance@affysavings.com", name: "Alice Smith", role: "Finance", permissions: ["approve_transactions", "view_metrics"], is_active: true }
-    ];
-    setStorage(STAFF_KEY, defaultStaff);
+  // Clear mock accounts
+  const existingAccounts = getStorage<LinkedAccount[]>(ACCOUNTS_KEY, []);
+  const sanitizedAccounts = existingAccounts.filter(a => a.account_holder !== 'Jane Doe');
+  if (sanitizedAccounts.length !== existingAccounts.length) {
+    setStorage(ACCOUNTS_KEY, sanitizedAccounts);
   }
 
   // Seed CMS Settings (with migration for directDeposit config if missing & sanitize hidden links)
